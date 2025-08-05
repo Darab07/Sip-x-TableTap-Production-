@@ -40,13 +40,12 @@ export default function Home() {
           <h2 className="text-white text-lg font-semibold">{restaurantName}</h2>
         </div>
         
-        {/* Earn Button */}
-        <Button
-          onClick={handleEarnPoints}
-          className="bg-pink-500 hover:bg-pink-600 text-white px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 transform hover:scale-105 active:scale-95 shadow-lg"
-        >
-          Earn 3₵
-        </Button>
+        {/* Logo Placeholder */}
+        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center">
+          <div className="w-8 h-8 bg-white rounded-md flex items-center justify-center">
+            <span className="text-black text-xs font-bold">LOGO</span>
+          </div>
+        </div>
       </div>
       
       {/* Hero Content */}
