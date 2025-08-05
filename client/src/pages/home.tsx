@@ -40,11 +40,13 @@ export default function Home() {
           <h2 className="text-white text-lg font-semibold">{restaurantName}</h2>
         </div>
         
-        {/* Logo Placeholder */}
-        <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-lg flex items-center justify-center">
-          <div className="w-8 h-8 bg-white rounded-md flex items-center justify-center">
-            <span className="text-black text-xs font-bold">LOGO</span>
-          </div>
+        {/* Crusteez Logo */}
+        <div className="w-12 h-12 flex items-center justify-center">
+          <img 
+            src="/attached_assets/ChatGPT_1754391471062.png" 
+            alt="Crusteez Logo" 
+            className="w-10 h-10 object-contain"
+          />
         </div>
       </div>
       
