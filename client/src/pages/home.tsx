@@ -29,22 +29,19 @@ export default function Home() {
           backgroundImage: "url('https://images.unsplash.com/photo-1565299624946-b28f40a0ca4b?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&h=1200')"
         }}
       />
-      
       {/* Dark Overlay */}
       <div className="absolute inset-0 bg-black bg-opacity-40" />
-      
       {/* Top Navigation Bar */}
       <div className="relative z-10 flex justify-end items-start p-4 pt-12">
         {/* Crusteez Logo */}
         <div className="w-12 h-12 flex items-center justify-center">
           <img 
-            src="/attached_assets/ChatGPT_1754391471062.png" 
+            src="attached_assets/ChatGPT.png" 
             alt="Crusteez Logo" 
-            className="w-10 h-10 object-contain"
+            className="w-10 h-10 object-contain pt-[0px] pb-[0px]"
           />
         </div>
       </div>
-      
       {/* Hero Content */}
       <div className="relative z-10 flex-1 flex flex-col justify-center px-6">
         <div className="max-w-sm">
@@ -60,7 +57,6 @@ export default function Home() {
           </p>
         </div>
       </div>
-      
       {/* Bottom Info Section */}
       <div className="relative z-10 bg-white rounded-t-3xl mt-auto pt-6 px-6 pb-8">
         {/* Store Timings */}
