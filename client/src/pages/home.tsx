@@ -52,7 +52,7 @@ export default function Home() {
       <div className="relative z-10 flex-1 flex flex-col justify-center px-6">
         <div className="max-w-sm">
           <h1 className="text-white text-4xl md:text-5xl font-bold leading-tight mb-4">
-            Crack Open the Box Together
+            Crack Open <br />the Box Together
           </h1>
           
           <p className="text-white text-base font-normal opacity-90 leading-relaxed mb-2">
