@@ -34,12 +34,7 @@ export default function Home() {
       <div className="absolute inset-0 bg-black bg-opacity-40" />
       
       {/* Top Navigation Bar */}
-      <div className="relative z-10 flex justify-between items-start p-4 pt-12">
-        {/* Restaurant Name */}
-        <div className="flex flex-col">
-          <h2 className="text-white text-lg font-semibold">{restaurantName}</h2>
-        </div>
-        
+      <div className="relative z-10 flex justify-end items-start p-4 pt-12">
         {/* Crusteez Logo */}
         <div className="w-12 h-12 flex items-center justify-center">
           <img 
