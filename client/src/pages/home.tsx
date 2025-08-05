@@ -61,53 +61,40 @@ export default function Home() {
             HEY, {customerName}.
           </h1>
           
-          <p className="text-white text-lg md:text-xl font-medium opacity-90 leading-relaxed mb-8">
-            Start your order. Everyone's invited.
+          <p className="text-white text-base font-normal opacity-90 leading-relaxed mb-2">
+            Introducing our
           </p>
-          
-          {/* Restaurant Info Overlay */}
-          <div className="bg-white/90 backdrop-blur-sm px-4 py-4 rounded-2xl shadow-lg mb-6">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center space-x-2">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  {restaurantName}
-                </h2>
-                <div className="w-3 h-3 bg-earn-green rounded-full flex items-center justify-center">
-                  <div className="w-1.5 h-0.5 bg-white rounded-sm" />
-                </div>
-              </div>
-              
-              <Badge variant="secondary" className="bg-gray-100 text-gray-700 hover:bg-gray-100 text-xs">
-                {categoryTag}
-              </Badge>
-            </div>
-            
-            {/* Info Cards */}
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="flex flex-col items-center">
-                <span className="text-lg mb-1">⭐</span>
-                <span className="text-gray-600">4.8</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-lg mb-1">🚗</span>
-                <span className="text-gray-600">15-25 min</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-lg mb-1">💳</span>
-                <span className="text-gray-600">Free</span>
-              </div>
-            </div>
-          </div>
+          <p className="text-white text-base font-normal opacity-90 leading-relaxed mb-8">
+            new spring menu.
+          </p>
         </div>
       </div>
       
-      {/* Bottom CTA */}
-      <div className="relative z-10 p-6 pb-8">
+      {/* Bottom Info Section */}
+      <div className="relative z-10 bg-white rounded-t-3xl mt-auto pt-6 px-6 pb-8">
+        {/* Restaurant Categories */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center space-x-2">
+            <div className="w-6 h-6 bg-black rounded-sm flex items-center justify-center">
+              <div className="w-3 h-1.5 bg-white rounded-sm" />
+            </div>
+            <span className="text-black text-sm font-medium">Honest People</span>
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <div className="w-6 h-6 bg-earn-green rounded-full flex items-center justify-center">
+              <div className="w-3 h-1.5 bg-white rounded-sm" />
+            </div>
+            <span className="text-black text-sm font-medium">{categoryTag}</span>
+          </div>
+        </div>
+        
+        {/* Order Button */}
         <Button 
           onClick={handleOrderNow}
           className="w-full bg-black hover:bg-gray-800 active:bg-gray-900 text-white py-4 rounded-2xl font-semibold text-lg transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg"
         >
-          <span>Order Now</span>
+          <span>Order now</span>
           <ArrowRight className="w-5 h-5 ml-2" />
         </Button>
       </div>
