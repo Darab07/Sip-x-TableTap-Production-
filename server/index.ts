@@ -1,6 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { serveStatic, log } from "./vite";
+import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 
@@ -53,33 +53,30 @@ app.use((req, res, next) => {
   next();
 });
 
-// Register API routes
-registerRoutes(app);
+(async () => {
+  const server = await registerRoutes(app);
 
-// Error handling middleware
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  const status = err.status || err.statusCode || 500;
-  const message = err.message || "Internal Server Error";
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    const status = err.status || err.statusCode || 500;
+    const message = err.message || "Internal Server Error";
 
-  res.status(status).json({ message });
-  throw err;
-});
+    res.status(status).json({ message });
+    throw err;
+  });
 
-// Serve static files in production
-if (process.env.NODE_ENV === "production") {
-  serveStatic(app);
-}
+  // importantly only setup vite in development and after
+  // setting up all the other routes so the catch-all route
+  // doesn't interfere with the other routes
+  if (app.get("env") === "development") {
+    await setupVite(app, server);
+  } else {
+    serveStatic(app);
+  }
 
-// For local development
-if (process.env.NODE_ENV !== "production") {
-  const { setupVite } = await import("./vite");
-  const { createServer } = await import("http");
-  
-  const server = createServer(app);
-  
-  // Setup Vite for development
-  await setupVite(app, server);
-
+  // ALWAYS serve the app on the port specified in the environment variable PORT
+  // Other ports are firewalled. Default to 5000 if not specified.
+  // this serves both the API and the client.
+  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen({
     port,
@@ -90,7 +87,4 @@ if (process.env.NODE_ENV !== "production") {
     log(`Access the app at: http://192.168.18.42:${port}`);
     log(`For mobile devices, use your computer's IP address`);
   });
-}
-
-// Export for Vercel
-export default app;
+})();
