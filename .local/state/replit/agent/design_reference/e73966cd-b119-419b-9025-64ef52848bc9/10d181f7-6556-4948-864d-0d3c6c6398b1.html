@@ -1,0 +1,239 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TableTap - Order Now</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'inter': ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        'earn-green': '#10B981',
+                    }
+                }
+            }
+        };
+    </script>
+</head>
+<body class="font-inter bg-white min-h-screen">
+    <!-- @COMPONENT: TableTapLandingPage [customerName, restaurantName, categoryTag] -->
+    <div class="relative min-h-screen flex flex-col">
+        
+        <!-- Hero Section with Navigation -->
+        <div class="relative h-screen flex flex-col">
+            <!-- Background Hero Image with Overlay -->
+            <!-- A beautifully plated gourmet dish with fresh greens and artistic presentation on a wooden table -->
+            <div 
+                class="absolute inset-0 bg-cover bg-center bg-no-repeat"
+                style="background-image: url('https://pixabay.com/get/g5e175e128c242e4ecd28fde97efb100ff25ce9ae9f3436962206d75541396049511ff0feb4712701d59d1ec89df99e83350696f5f31e84a9607fc7d500fd6f4f_1280.jpg');"
+            ></div>
+            
+            <!-- Dark Overlay -->
+            <div class="absolute inset-0 bg-black bg-opacity-40"></div>
+            
+            <!-- Top Navigation Bar -->
+            <div class="relative z-10 flex justify-between items-center p-4 pt-12">
+                <!-- @COMPONENT: HamburgerMenu -->
+                <button 
+                    class="w-8 h-8 flex flex-col justify-center items-center space-y-1 group"
+                    data-event="click:toggleMenu"
+                    data-implementation="Should open side navigation menu"
+                >
+                    <span class="w-6 h-0.5 bg-white group-hover:bg-gray-200 transition-colors duration-200"></span>
+                    <span class="w-6 h-0.5 bg-white group-hover:bg-gray-200 transition-colors duration-200"></span>
+                    <span class="w-6 h-0.5 bg-white group-hover:bg-gray-200 transition-colors duration-200"></span>
+                </button>
+                <!-- @END_COMPONENT: HamburgerMenu -->
+                
+                <!-- @COMPONENT: EarnButton -->
+                <button 
+                    class="bg-earn-green text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-emerald-600 transition-all duration-200 transform hover:scale-105 active:scale-95 shadow-lg"
+                    data-event="click:handleEarnPoints"
+                    data-implementation="Should navigate to rewards/points section"
+                >
+                    Earn 3₵
+                </button>
+                <!-- @END_COMPONENT: EarnButton -->
+            </div>
+            
+            <!-- Hero Content -->
+            <div class="relative z-10 flex-1 flex flex-col justify-center px-6">
+                <!-- @COMPONENT: HeroContent [customerName] -->
+                <div class="max-w-sm">
+                    <!-- @STATE: customerName:string = "Alex" -->
+                    <h1 class="text-white text-4xl md:text-5xl font-bold leading-tight mb-4">
+                        HEY, <span data-bind="customerName" class="uppercase">ALEX</span>.
+                    </h1>
+                    
+                    <p class="text-white text-lg md:text-xl font-medium opacity-90 leading-relaxed">
+                        Start your order. Everyone's invited.
+                    </p>
+                </div>
+                <!-- @END_COMPONENT: HeroContent -->
+            </div>
+        </div>
+        
+        <!-- Middle Section - Restaurant Info -->
+        <div class="bg-white px-6 py-8 -mt-16 relative z-20 rounded-t-3xl shadow-xl">
+            <!-- @COMPONENT: RestaurantInfo [restaurantName, categoryTag] -->
+            <div class="flex items-center justify-between mb-6">
+                <div class="flex items-center space-x-3">
+                    <!-- @STATE: restaurantName:string = "TableTap Kitchen" -->
+                    <h2 class="text-xl font-semibold text-gray-900" data-bind="restaurantName">
+                        TableTap Kitchen
+                    </h2>
+                    <i class="fas fa-check-circle text-earn-green text-sm"></i>
+                </div>
+                
+                <!-- @STATE: categoryTag:string = "Starter" -->
+                <span 
+                    class="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-sm font-medium"
+                    data-bind="categoryTag"
+                >
+                    Starter
+                </span>
+            </div>
+            <!-- @END_COMPONENT: RestaurantInfo -->
+            
+            <!-- Additional Info Cards -->
+            <div class="grid grid-cols-3 gap-4 mb-8">
+                <div class="text-center p-4 bg-gray-50 rounded-xl">
+                    <div class="text-2xl mb-2">⭐</div>
+                    <div class="text-sm text-gray-600">4.8 Rating</div>
+                </div>
+                <div class="text-center p-4 bg-gray-50 rounded-xl">
+                    <div class="text-2xl mb-2">🚗</div>
+                    <div class="text-sm text-gray-600">15-25 min</div>
+                </div>
+                <div class="text-center p-4 bg-gray-50 rounded-xl">
+                    <div class="text-2xl mb-2">💳</div>
+                    <div class="text-sm text-gray-600">Free Delivery</div>
+                </div>
+            </div>
+            
+            <!-- Featured Items Preview -->
+            <div class="mb-20">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">Popular Items</h3>
+                
+                <!-- @MAP: featuredItems.map(item => ( -->
+                <div class="flex items-center space-x-4 p-4 bg-gray-50 rounded-xl mb-3">
+                    <!-- A close-up of a gourmet burger with fresh ingredients and crispy fries -->
+                    <img 
+                        src="https://images.unsplash.com/photo-1571091718767-18b5b1457add?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=200&h=200" 
+                        alt="Gourmet burger with fries" 
+                        class="w-16 h-16 rounded-lg object-cover"
+                        data-mock-image="true"
+                    >
+                    <div class="flex-1">
+                        <h4 class="font-medium text-gray-900" data-mock="true">Signature Burger</h4>
+                        <p class="text-sm text-gray-600" data-mock="true">With crispy fries and special sauce</p>
+                        <p class="text-sm font-semibold text-gray-900" data-mock="true">$12.99</p>
+                    </div>
+                    <button class="text-earn-green hover:text-emerald-600 transition-colors">
+                        <i class="fas fa-plus-circle text-xl"></i>
+                    </button>
+                </div>
+                
+                <div class="flex items-center space-x-4 p-4 bg-gray-50 rounded-xl mb-3">
+                    <!-- A fresh Mediterranean salad bowl with colorful vegetables and herbs -->
+                    <img 
+                        src="https://images.unsplash.com/photo-1512621776951-a57141f2eefd?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=200&h=200" 
+                        alt="Mediterranean salad bowl" 
+                        class="w-16 h-16 rounded-lg object-cover"
+                        data-mock-image="true"
+                    >
+                    <div class="flex-1">
+                        <h4 class="font-medium text-gray-900" data-mock="true">Mediterranean Bowl</h4>
+                        <p class="text-sm text-gray-600" data-mock="true">Fresh greens with feta and olives</p>
+                        <p class="text-sm font-semibold text-gray-900" data-mock="true">$9.99</p>
+                    </div>
+                    <button class="text-earn-green hover:text-emerald-600 transition-colors">
+                        <i class="fas fa-plus-circle text-xl"></i>
+                    </button>
+                </div>
+                
+                <div class="flex items-center space-x-4 p-4 bg-gray-50 rounded-xl">
+                    <!-- A steaming bowl of creamy pasta with herbs and parmesan cheese -->
+                    <img 
+                        src="https://pixabay.com/get/g9486188b2c1437a8c490bbdbfd8fa952b8d460c62cb56edb334e08c8de6bf219b78423fae39769ab780ddb599cdfbdacc78770fa4e2fba095579056dbb8070fb_1280.jpg" 
+                        alt="Creamy pasta with herbs" 
+                        class="w-16 h-16 rounded-lg object-cover"
+                        data-mock-image="true"
+                    >
+                    <div class="flex-1">
+                        <h4 class="font-medium text-gray-900" data-mock="true">Truffle Pasta</h4>
+                        <p class="text-sm text-gray-600" data-mock="true">Creamy alfredo with truffle oil</p>
+                        <p class="text-sm font-semibold text-gray-900" data-mock="true">$16.99</p>
+                    </div>
+                    <button class="text-earn-green hover:text-emerald-600 transition-colors">
+                        <i class="fas fa-plus-circle text-xl"></i>
+                    </button>
+                </div>
+                <!-- @END_MAP )) -->
+            </div>
+        </div>
+        
+        <!-- Sticky Bottom CTA -->
+        <!-- @COMPONENT: StickyOrderButton -->
+        <div class="fixed bottom-0 left-0 right-0 bg-white p-4 shadow-2xl border-t border-gray-100 z-30">
+            <button 
+                class="w-full bg-black text-white py-4 rounded-2xl font-semibold text-lg flex items-center justify-center space-x-2 hover:bg-gray-800 active:bg-gray-900 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-lg"
+                data-event="click:handleOrderNow"
+                data-implementation="Should navigate to menu/cart page"
+            >
+                <span>Order Now</span>
+                <i class="fas fa-arrow-right ml-2"></i>
+            </button>
+        </div>
+        <!-- @END_COMPONENT: StickyOrderButton -->
+    </div>
+    <!-- @END_COMPONENT: TableTapLandingPage -->
+
+    <script>
+        // TODO: Implement React component structure, state management, and navigation logic
+        (function() {
+            // Demo interaction for earn button
+            const earnButton = document.querySelector('[data-event="click:handleEarnPoints"]');
+            if (earnButton) {
+                earnButton.addEventListener('click', function() {
+                    // TODO: Implement rewards/points navigation
+                    console.log('Navigate to rewards section');
+                });
+            }
+
+            // Demo interaction for hamburger menu
+            const hamburgerMenu = document.querySelector('[data-event="click:toggleMenu"]');
+            if (hamburgerMenu) {
+                hamburgerMenu.addEventListener('click', function() {
+                    // TODO: Implement side navigation menu toggle
+                    console.log('Toggle navigation menu');
+                });
+            }
+
+            // Demo interaction for order button
+            const orderButton = document.querySelector('[data-event="click:handleOrderNow"]');
+            if (orderButton) {
+                orderButton.addEventListener('click', function() {
+                    // TODO: Implement navigation to menu/cart page
+                    console.log('Navigate to menu/order page');
+                });
+            }
+
+            // Add item buttons
+            const addButtons = document.querySelectorAll('.fa-plus-circle');
+            addButtons.forEach(button => {
+                button.closest('button').addEventListener('click', function() {
+                    // TODO: Implement add to cart functionality
+                    console.log('Add item to cart');
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

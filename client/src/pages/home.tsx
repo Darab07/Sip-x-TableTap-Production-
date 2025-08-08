@@ -1,12 +1,23 @@
 import { useState } from 'react';
 import { Menu, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { motion } from "framer-motion";
 import { Badge } from '@/components/ui/badge';
+import { useLocation } from "wouter";
 
 export default function Home() {
   const [customerName, setCustomerName] = useState('ALEX');
   const [restaurantName] = useState('Crusteez');
   const [categoryTag] = useState('Starter');
+  const [location, setLocation] = useLocation();
+
+  // Extract table number from URL
+  const getTableNumber = () => {
+    const match = location.match(/\/Crusteez\/Table(\d+)\/home/);
+    return match ? match[1] : '7'; // Default to 7 if not found
+  };
+
+  const tableNumber = getTableNumber();
 
   const handleMenuToggle = () => {
     console.log('Toggle navigation menu');
@@ -17,16 +28,22 @@ export default function Home() {
   };
 
   const handleOrderNow = () => {
-    console.log('Navigate to menu/order page');
+    setLocation(`/Crusteez/Table${tableNumber}/menu`); // Use dynamic table number
   };
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <motion.div
+      initial={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -100 }} // Slide out to left
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.4 }}
+      className="min-h-[100dvh] w-screen flex flex-col overflow-hidden"
+    >
       {/* Background Hero Image with Overlay */}
       <div 
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
-          backgroundImage: "url('https://images.unsplash.com/photo-1565299624946-b28f40a0ca4b?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&h=1200')"
+          backgroundImage: "url('/HeroImage.jpg')"
         }}
       />
       {/* Dark Overlay */}
@@ -34,11 +51,11 @@ export default function Home() {
       {/* Top Navigation Bar */}
       <div className="relative z-10 flex justify-end items-start p-4 pt-12">
         {/* Crusteez Logo */}
-        <div className="w-12 h-12 flex items-center justify-center">
-          <img 
-            src="attached_assets/ChatGPT.png" 
-            alt="Crusteez Logo" 
-            className="w-10 h-10 object-contain pt-[0px] pb-[0px]"
+        <div className="absolute top-5 right-2 z-20">
+          <img
+            src="/logo.png"
+            alt="Crusteez Logo"
+            className="w-[90px] h-[90px] object-contain"
           />
         </div>
       </div>
@@ -58,12 +75,13 @@ export default function Home() {
         </div>
       </div>
       {/* Bottom Info Section */}
-      <div className="relative z-10 bg-white rounded-t-3xl mt-auto pt-6 px-6 pb-8">
+      <div className="relative z-10 bg-white rounded-t-3xl mt-auto pt-6 px-6 pb-safe">
         {/* Store Timings */}
         <div className="flex items-center justify-between mb-6">
           <div>
             <h3 className="text-black text-sm font-semibold mb-1">Store Timings:</h3>
             <p className="text-gray-600 text-xs">MONDAY - SATURDAY</p>
+            <p className="text-gray-800 text-xs mt-1">Table Number: {tableNumber}</p>
           </div>
           
           <div className="text-right">
@@ -84,6 +102,6 @@ export default function Home() {
         {/* Powered by TableTap */}
         <p className="text-gray-400 text-xs text-left">Powered by TableTap</p>
       </div>
-    </div>
+    </motion.div>
   );
 }
