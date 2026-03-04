@@ -39,6 +39,8 @@ function Router() {
           </React.Fragment>
         ))}
         
+        {/* Default admin dashboard so hitting the bare port isn't a 404 */}
+        <Route path="/" component={Admin} />
         <Route path="/Crusteez/admin" component={Admin} />
         <Route component={NotFound} />
       </Switch>

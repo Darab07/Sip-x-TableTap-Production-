@@ -1,12 +1,98 @@
 import { motion, AnimatePresence } from "framer-motion";
 import React, { useState, useRef, useEffect } from "react";
-import { ChevronLeft, ChevronDown, Plus, Minus, X, ShoppingCart, Users } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronDown,
+  Plus,
+  Minus,
+  X,
+  ShoppingCart,
+  Users,
+  User,
+  Clock,
+  Repeat,
+  Wallet,
+  Pencil,
+  Link2,
+  MapPin,
+  Star,
+  Menu as MenuIcon,
+  MoreHorizontal,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { getOrCreateUserID } from "@/lib/userID";
-import { useLocation } from "wouter";
 
 const userId = getOrCreateUserID();
 
 const tabs = ["Deals", "Combos", "Donuts", "Sandwiches", "Salads", "Drinks"];
+
+const RESTAURANT = {
+  name: "Crusteez",
+  address: "DHA Phase 2, Islamabad",
+  rating: 4.8,
+  reviews: 2729,
+  servingTime: "15 - 20 min",
+  averageLabel: "Average serving time",
+  hours: "8 AM - 1 AM",
+};
+
+type CartItem = {
+  name: string;
+  price: number;
+  quantity: number;
+  image?: string;
+  details?: string;
+  addedBy: string;
+};
+
+const PRICE_MAP: Record<string, number> = {
+  "plain chocolate": 150,
+  "plain glaze": 150,
+  "strawberry sprinkle": 150,
+  "after eight": 240,
+  "coconut truffle": 240,
+  "cookies and cream": 240,
+  "ferrero rocher": 240,
+  "nutella bon": 240,
+  "oreo chocolate": 240,
+  "salted caramel": 240,
+  "bagelish": 300,
+  "bavarian cream": 300,
+  "benoffee": 300,
+  "blueberry cream cheese": 300,
+  "choco fudge": 300,
+  "chocolate malt": 300,
+  "hazelnutty": 300,
+  "jammie": 300,
+  "jelly donut": 300,
+  "kinder bueno": 300,
+  "lemon curd": 300,
+  "lotus": 300,
+  "peanut caramel": 300,
+  "pistachio delight": 300,
+  "rabri": 300,
+  "red velvet": 300,
+  "chicken malai boti": 450,
+  "club sandwich": 450,
+  "cubano": 450,
+  "mediteranian salad": 350,
+  "asian satay salad": 350,
+  "peach iced tea": 180,
+  "mix tea karak": 180,
+  "earl grey tea": 180,
+  "masala tea": 200,
+  "rose hibiscus": 200,
+  "cold chocolate milk": 200,
+  "cold coffee": 220,
+  "hot coffee": 200,
+};
+
+const SUGGESTED_ITEMS = [
+  { name: "Peach Iced Tea", price: 180, image: "/Drinks/Drink.png" },
+  { name: "Cold Chocolate Milk", price: 200, image: "/Drinks/Drink.png" },
+  { name: "Plain Glaze", price: 150, image: "/Classic/Plain Glaze.png" },
+  { name: "Nutella Bon", price: 240, image: "/Delights/Nutella Bon.png" },
+];
 
 // Smart Counter Component
 function SmartCounter({ 
@@ -203,15 +289,20 @@ function ModalSmartCounter({
 }
 
 export default function Menu() {
-  const [location] = useLocation();
-  
-  // Extract table number from URL
-  const getTableNumber = () => {
-    const match = location.match(/\/Crusteez\/Table(\d+)\/menu/);
-    return match ? match[1] : '7'; // Default to 7 if not found
+
+  const getTableIdentifier = () => {
+    if (typeof window === "undefined") {
+      return "Table1";
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("table") ?? "Table1";
   };
 
-  const tableNumber = getTableNumber();
+const tableIdentifier = getTableIdentifier();
+const tableNumberMatch = tableIdentifier.match(/(\d+)/);
+const tableNumber =
+  tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || "1";
+const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
   
   const [activeTab, setActiveTab] = useState("Deals");
   const [showDonutModal, setShowDonutModal] = useState(false);
@@ -280,7 +371,27 @@ export default function Menu() {
 
   // Scroll-based active tab detection
   const [scrollActiveTab, setScrollActiveTab] = useState("Deals");
-  const [showStickyCart, setShowStickyCart] = useState(false);
+  const [showStickyHeader, setShowStickyHeader] = useState(false);
+  const [serviceType, setServiceType] = useState<"table" | "takeaway">("table");
+  const [selectedItem, setSelectedItem] = useState<{
+    name: string;
+    description: string;
+    price: number;
+    image?: string;
+  } | null>(null);
+  const [itemQuantity, setItemQuantity] = useState(1);
+  const [showItemModal, setShowItemModal] = useState(false);
+  const [showGroupOrder, setShowGroupOrder] = useState(false);
+  const [showWhoPays, setShowWhoPays] = useState(false);
+  const [whoPaysSelection, setWhoPaysSelection] = useState<"all" | "self" | "custom">("all");
+  const [customPayAmount, setCustomPayAmount] = useState("");
+  const [spendingLimit, setSpendingLimit] = useState("");
+  const [repeatSelection, setRepeatSelection] = useState<"none" | "daily" | "weekly" | "custom">("none");
+  const [whoPaysError, setWhoPaysError] = useState<string>("");
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showJoinPage, setShowJoinPage] = useState(false);
+  const [hasViewedGroupOrder, setHasViewedGroupOrder] = useState(false);
+  const [showGroupSummary, setShowGroupSummary] = useState(false);
   const [selectedTip, setSelectedTip] = useState(() => {
     const savedTip = localStorage.getItem(`selectedTip_${userId}`);
     return savedTip ? parseInt(savedTip) : 5;
@@ -288,6 +399,16 @@ export default function Menu() {
   const [showSplitOptions, setShowSplitOptions] = useState(false);
   const [showPaymentMethod, setShowPaymentMethod] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'easypaisa' | 'jazzcash' | null>(null);
+  const [cardholderName, setCardholderName] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [expiration, setExpiration] = useState("");
+  const [cvc, setCvc] = useState("");
+  const [errors, setErrors] = useState<{
+    cardholderName?: string;
+    cardNumber?: string;
+    expiration?: string;
+    cvc?: string;
+  }>({});
   const [splitCount, setSplitCount] = useState(2);
   const [splitType, setSplitType] = useState<'equal' | 'custom' | 'by-item'>('equal');
   const [customAmounts, setCustomAmounts] = useState<{[key: number]: number}>({});
@@ -299,9 +420,60 @@ export default function Menu() {
   const [collaborativeUserId, setCollaborativeUserId] = useState<string | null>(null);
   const [isSessionLocked, setIsSessionLocked] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  const validateCardholderName = (name: string) => {
+    if (!name.trim()) return "Cardholder name is required";
+    if (name.length < 2) return "Name must be at least 2 characters";
+    if (!/^[a-zA-Z\s]+$/.test(name)) return "Name can only contain letters and spaces";
+    return "";
+  };
+
+  const validateCardNumber = (number: string) => {
+    const cleanNumber = number.replace(/\s/g, "");
+    if (!cleanNumber) return "Card number is required";
+    if (!/^\d{13,19}$/.test(cleanNumber)) return "Card number must be 13-19 digits";
+    return "";
+  };
+
+  const validateExpiration = (exp: string) => {
+    if (!exp) return "Expiration date is required";
+    if (!/^\d{2}\/\d{2}$/.test(exp)) return "Use MM/YY format";
+    const [month, year] = exp.split("/");
+    const currentDate = new Date();
+    const currentYear = currentDate.getFullYear() % 100;
+    const currentMonth = currentDate.getMonth() + 1;
+    if (parseInt(month, 10) < 1 || parseInt(month, 10) > 12) return "Invalid month";
+    if (
+      parseInt(year, 10) < currentYear ||
+      (parseInt(year, 10) === currentYear && parseInt(month, 10) < currentMonth)
+    ) {
+      return "Card has expired";
+    }
+    return "";
+  };
+
+  const validateCvc = (value: string) => {
+    if (!value) return "CVC is required";
+    if (!/^\d{3,4}$/.test(value)) return "CVC must be 3-4 digits";
+    return "";
+  };
+
+  const formatCardNumber = (value: string) => {
+    const cleanValue = value.replace(/\s/g, "");
+    const groups = cleanValue.match(/.{1,4}/g);
+    return groups ? groups.join(" ") : cleanValue;
+  };
+
+  const formatExpiration = (value: string) => {
+    const cleanValue = value.replace(/\D/g, "");
+    if (cleanValue.length >= 2) {
+      return `${cleanValue.slice(0, 2)}/${cleanValue.slice(2, 4)}`;
+    }
+    return cleanValue;
+  };
   
   // Cart state with user tracking - using unique keys for each user's items
-  const [cart, setCart] = useState<{[key: string]: {name: string; price: number; quantity: number; image?: string; details?: string; addedBy: string}}>(() => {
+  const [cart, setCart] = useState<Record<string, CartItem>>(() => {
     console.log('Initializing cart state for userId:', userId);
     const savedCart = localStorage.getItem(`cart_${userId}`);
     console.log('Initial saved cart from localStorage:', savedCart);
@@ -923,14 +1095,35 @@ export default function Menu() {
     return Object.values(cart).reduce((total, item) => total + item.quantity, 0);
   };
 
+  const getCartQuantityByName = (itemName: string) => {
+    const item = Object.values(cart).find(entry => entry.name === itemName);
+    return item?.quantity || 0;
+  };
+
+  const resolvePrice = (name: string, fallback?: number) => {
+    const numericFallback = typeof fallback === "number" ? fallback : 0;
+    const key = name.toLowerCase();
+    const mapped = PRICE_MAP[key];
+    if (mapped) return mapped;
+    if (numericFallback > 0) return numericFallback;
+    const suggested = SUGGESTED_ITEMS.find(item => item.name.toLowerCase() === key);
+    return suggested?.price ?? 0;
+  };
+
   const getTipAmount = () => {
     const subtotal = getCartTotal();
-    return (subtotal * selectedTip) / 100;
+    return Math.round((subtotal * selectedTip) / 100);
   };
+
+  const getGstAmount = () => Math.round(getCartTotal() * 0.05);
+  const getServiceFee = () => Math.round((getCartTotal() + getGstAmount()) * 0.01);
 
   const getTotalWithTip = () => {
     return getCartTotal() + getTipAmount();
   };
+
+  const getGrandTotal = () =>
+    getCartTotal() + getGstAmount() + getServiceFee() + getTipAmount();
 
   const clearCart = () => {
     setCart({});
@@ -1018,8 +1211,8 @@ export default function Menu() {
         requestAnimationFrame(() => {
           const scrollPosition = window.scrollY + 200; // Offset for sticky header
           
-          // Show sticky cart after scrolling past header (approximately 200px)
-          setShowStickyCart(window.scrollY > 200);
+          // Show sticky header after scrolling past hero
+          setShowStickyHeader(window.scrollY > 200);
           
           const sections = [
             { name: "Deals", ref: recommendedRef },
@@ -1063,6 +1256,134 @@ export default function Menu() {
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  const openItemDetailFromCard = (cardEl: HTMLDivElement) => {
+    const name = cardEl.querySelector('.item-title')?.textContent?.trim();
+    if (!name) return;
+    const description = cardEl.querySelector('.item-description')?.textContent?.trim() || "";
+    const priceText = cardEl.querySelector('.item-price')?.textContent || "";
+    const numeric = priceText.replace(/[^\d]/g, "");
+    const price = resolvePrice(name, numeric ? parseInt(numeric, 10) : undefined);
+    const image = (cardEl.querySelector('img') as HTMLImageElement | null)?.getAttribute('src') || "";
+    const currentQty = getCartQuantityByName(name);
+    setSelectedItem({ name, description, price, image });
+    setItemQuantity(currentQty > 0 ? currentQty : 1);
+    setShowItemModal(true);
+  };
+
+  const openItemDetailFromData = (item: { name: string; description?: string; price?: number; image?: string; }) => {
+    const price = resolvePrice(item.name, item.price);
+    const image = item.image || "";
+    const description = item.description || "";
+    const currentQty = getCartQuantityByName(item.name);
+    setSelectedItem({ name: item.name, description, price, image });
+    setItemQuantity(currentQty > 0 ? currentQty : 1);
+    setShowItemModal(true);
+  };
+
+  const handleCloseItemModal = () => {
+    setShowItemModal(false);
+    setSelectedItem(null);
+    setItemQuantity(1);
+  };
+
+  const handleAddSelectedItem = () => {
+    if (!selectedItem) return;
+    const currentQty = getCartQuantityByName(selectedItem.name);
+    const diff = itemQuantity - currentQty;
+    if (diff > 0) {
+      for (let i = 0; i < diff; i++) {
+        addItemToCart(selectedItem.name, selectedItem.price, selectedItem.image, selectedItem.description);
+      }
+    } else if (diff < 0) {
+      for (let i = 0; i < Math.abs(diff); i++) {
+        removeItemByName(selectedItem.name);
+      }
+    }
+    handleCloseItemModal();
+  };
+
+  useEffect(() => {
+    if (showItemModal || showGroupOrder || showWhoPays || showInviteModal || showJoinPage || showGroupSummary || showCart) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [showItemModal, showGroupOrder, showWhoPays, showInviteModal, showJoinPage, showGroupSummary, showCart]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("group") === "true") {
+      setShowJoinPage(true);
+    }
+  }, []);
+
+  const getSuggestedItems = (currentName: string) => {
+    const filtered = SUGGESTED_ITEMS.filter(item => item.name.toLowerCase() !== currentName.toLowerCase());
+    return (filtered.length ? filtered : SUGGESTED_ITEMS).slice(0, 2);
+  };
+
+  const renderGroupSummaryItems = () => {
+    return Object.entries(cart).map(([key, item]) => (
+      <div key={key} className="flex items-center justify-between py-3">
+        <div className="flex items-center gap-3">
+          {item.image && <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover" />}
+          <div>
+            <p className="text-base font-semibold text-gray-900 heading-font">{item.name}</p>
+            <p className="text-sm text-gray-600 subtext-font">Rs.{item.price}/-</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1">
+          <button onClick={() => removeItemFromCart(key)} className="p-1">
+            <Minus size={16} />
+          </button>
+          <span className="text-base font-semibold heading-font">{item.quantity}</span>
+          <button onClick={() => addItemToCart(item.name, item.price, item.image, item.details)} className="p-1">
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+    ));
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      const tempInput = document.createElement("textarea");
+      tempInput.value = text;
+      tempInput.setAttribute("readonly", "");
+      tempInput.style.position = "absolute";
+      tempInput.style.left = "-9999px";
+      document.body.appendChild(tempInput);
+      tempInput.select();
+      document.execCommand("copy");
+      document.body.removeChild(tempInput);
+      setNotification({ type: "success", message: "Link copied" });
+      setTimeout(() => setNotification(null), 2000);
+    } catch (e) {
+      setNotification({ type: "error", message: "Unable to copy link" });
+      setTimeout(() => setNotification(null), 2000);
+    }
+  };
+
+  const whoPaysOptions = [
+    {
+      key: "everyone",
+      title: "You pay for everyone",
+      description: "No spending limit",
+      icon: <Wallet size={18} />,
+      action: () => {}
+    },
+    {
+      key: "self",
+      title: "Everyone pays for themselves",
+      description: "Up to 18 people",
+      icon: <Users size={18} />,
+      action: () => {}
+    }
+  ];
 
   // Check for join requests and responses periodically
   useEffect(() => {
@@ -1360,13 +1681,15 @@ export default function Menu() {
     };
   }, [isCollaborativeSession, collaborativeUserId, cart]);
 
+  const cartListScrollable = Object.keys(cart).length > 2;
+
   return (
     <motion.div
       initial={{ opacity: 0, x: 100 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -100 }}
       transition={{ duration: 0.4 }}
-      className="bg-[#faf9f6] pb-safe"
+      className="bg-[#faf9f6] pb-safe pb-2"
     >
       {/* Notification Banner */}
       {notification && (
@@ -1386,136 +1709,246 @@ export default function Menu() {
         </div>
       )}
 
-      {/* Top Bar */}
-      <div className="relative px-6 py-20 text-black bg-cover bg-center" style={{ backgroundImage: 'url(/Background.png)' }}>
-        {/* Session Status on the top left */}
-        <div className="absolute top-4 left-6 text-xs text-black">
-          {isSessionLocked && (
-            <div className="text-red-600 font-medium">
-              🔒 Session Locked
-            </div>
-          )}
-          {isSyncing && (
-            <div className="text-blue-600 font-medium animate-pulse">
-              🔄 Syncing...
-            </div>
-          )}
-        </div>
-        
-        {/* Centered Logo */}
-        <div className="absolute left-1/2 transform -translate-x-1/2 top-1/2 transform -translate-y-1/2">
+      {/* Header */}
+      <div
+        className="bg-white px-4 py-0 flex items-center justify-between border-b border-b-gray-200"
+        style={{ minHeight: "2.25rem" }}
+      >
+        <div className="flex items-center gap-3">
+          <MenuIcon className="text-gray-900" />
           <img
-            src="/logo.png"
-            alt="Logo"
-            className="w-28 h-28"
+            src="/TableTap.png"
+            alt="Table Tap"
+            className="shrink-0"
+            style={{ height: "6rem", width: "auto", display: "block" }}
           />
         </div>
-        
-
-        
-
-
-        {/* Collaborative Session Indicator - Bottom Left */}
-        {isCollaborativeSession && (
-          <div className="absolute bottom-2 left-6">
-            <div className="bg-green-100 border border-green-300 rounded-lg p-2 shadow-sm">
-              <div className="flex items-center space-x-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <span className="text-xs font-medium text-green-800">
-                  Shared
-                </span>
-                <button
-                  onClick={() => exitCollaborativeSession()}
-                  className="text-xs bg-red-500 text-white px-2 py-1 rounded hover:bg-red-600 transition-colors"
-                >
-                  Exit
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-        
-        {/* Permanent Cart Icon */}
-        <div className="fixed top-20 right-6 z-20">
-          <button
-            onClick={() => setShowCart(true)}
-            className="p-3 bg-white shadow-lg rounded-full transition-colors hover:bg-gray-50"
-          >
-            <ShoppingCart size={28} className="text-black" />
-            {getCartItemCount() > 0 && (
-              <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center">
-                {getCartItemCount()}
-              </div>
-            )}
-          </button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="rounded-full px-4">
+            <User size={16} />
+            Log in
+          </Button>
+          <Button size="sm" className="rounded-full px-4">
+            Sign up
+          </Button>
         </div>
       </div>
 
-             {/* Scrollable Tabs */}
-       <div className="flex overflow-x-auto space-x-8 px-6 py-4 bg-white border-b sticky top-0 z-20">
-         {tabs.map(tab => (
-           <button
-             key={tab}
-             data-tab={tab}
-             onClick={() => handleTabClick(tab)}
-             className={`text-sm font-medium pb-2 border-b-2 whitespace-nowrap ${
-               scrollActiveTab === tab
-                 ? "border-black text-black"
-                 : "border-transparent text-gray-500"
-             }`}
-           >
-             {tab}
-           </button>
-         ))}
-       </div>
+      {/* Menu Hero */}
+      <div className="relative">
+        <div className="h-[160px] w-full">
+          <img
+            src="/HeroImage.jpg"
+            alt="Crusteez hero"
+            className="h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/10 to-transparent" />
+        </div>
 
-      {/* All Sections on One Page */}
-      <div className="px-4">
-        {/* Share your cart Section */}
-        <div className="py-6">
-          <h2 className="text-xl font-extrabold tracking-tight mb-1">SHARE YOUR CART.</h2>
-          <p className="text-sm text-gray-600 mb-4">Group orders made simple — just add their UserID.</p>
-          
-          {/* User ID Display */}
-          <div className="mb-4">
-            <div className="text-sm font-bold text-gray-700">Your User ID: {userId}</div>
-          </div>
-          
-          {/* Share Cart Input */}
-          <div className="mt-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Share cart</label>
-            <div className="flex space-x-3">
-              <input
-                type="text"
-                placeholder="Friend's ID"
-                value={shareCartInput}
-                onChange={(e) => setShareCartInput(e.target.value)}
-                onFocus={() => {
-                  document.documentElement.style.overflow = 'hidden';
-                  document.body.style.overflow = 'hidden';
-                }}
-                onBlur={() => {
-                  document.documentElement.style.overflow = '';
-                  document.body.style.overflow = '';
-                }}
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-              <button 
-                onClick={() => {
-                  if (shareCartInput.trim()) {
-                    sendJoinRequest(shareCartInput.trim());
-                    setShareCartInput('');
-                  }
-                }}
-                className="bg-black text-white px-4 py-2 rounded-md hover:bg-gray-800 transition-colors"
+        <div className="absolute top-4 left-4 text-xs text-white space-y-1">
+          {isSessionLocked && (
+            <span className="px-3 py-1 bg-red-600/80 rounded-full font-semibold uppercase tracking-wide">
+              Session locked
+            </span>
+          )}
+          {isSyncing && (
+            <span className="px-3 py-1 bg-blue-600/80 rounded-full font-semibold uppercase tracking-wide animate-pulse">
+              Syncing...
+            </span>
+          )}
+        </div>
+
+        {isCollaborativeSession && (
+          <div className="absolute bottom-4 left-4">
+            <div className="bg-black/60 backdrop-blur rounded-full px-3 py-1 flex items-center gap-2">
+              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+              <span className="text-xs font-semibold text-white">Shared Cart</span>
+              <button
+                onClick={exitCollaborativeSession}
+                className="text-xs text-white/80 underline hover:text-white"
               >
-                Share
+                Exit
               </button>
             </div>
           </div>
-        </div>
+        )}
+      </div>
 
-                 {/* Deals Section */}
+      {/* Sticky header on scroll */}
+      {showStickyHeader && (
+        <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200 shadow-sm">
+          <div className="px-4 py-3 flex items-center justify-between">
+            <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" className="rounded-full px-4">
+                <User size={16} />
+                Log in
+              </Button>
+              <Button size="sm" className="rounded-full px-4">
+                Sign up
+              </Button>
+            </div>
+          </div>
+          <div className="px-4 pb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 flex items-center bg-gray-100 rounded-full px-3 py-2">
+                <input
+                  type="text"
+                  placeholder="Search menu"
+                  className="bg-transparent text-sm w-full focus:outline-none subtext-font placeholder:text-gray-400"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex overflow-x-auto space-x-8 px-4 pb-3">
+            {tabs.map(tab => (
+              <button
+                key={tab}
+                data-tab={tab}
+                onClick={() => handleTabClick(tab)}
+                className={`text-sm font-medium pb-2 border-b-2 whitespace-nowrap ${
+                  scrollActiveTab === tab
+                    ? "border-black text-black heading-font"
+                    : "border-transparent text-gray-500 subtext-font"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sticky View Cart Bar */}
+      {getCartItemCount() > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[1.1rem] pt-2 bg-white/95 backdrop-blur border-t border-gray-200">
+          <button
+            onClick={() => setShowCart(true)}
+            className="w-full flex items-center justify-between rounded-full bg-black text-white px-5 py-3 shadow-lg transition-colors hover:bg-gray-900 heading-font"
+          >
+            <div className="flex flex-col items-start leading-tight">
+              <span className="text-base heading-font">View cart ({getCartItemCount()})</span>
+              <span className="text-xs text-white/80 subtext-font">Tap to review your order</span>
+            </div>
+            <span className="text-base heading-font">Rs.{getCartTotal().toLocaleString()}</span>
+          </button>
+        </div>
+      )}
+
+      <div className="relative z-10">
+        <div className="relative bg-white pt-16 pb-8 px-4 sm:px-8 border-b border-gray-200">
+          <div className="absolute -top-12 left-1/2 -translate-x-1/2">
+            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-white shadow-xl border border-gray-100 flex items-center justify-center">
+              <img
+                src="/logo.png"
+                alt="Crusteez logo"
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover"
+              />
+            </div>
+          </div>
+          <p className="text-xs uppercase tracking-[0.3em] text-gray-500 subtext-font">Table Tap</p>
+          <h1 className="mt-2 text-3xl font-semibold text-gray-900 heading-font">{RESTAURANT.name}</h1>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-sm text-gray-500 subtext-font">
+            <div className="flex items-center gap-1">
+              <Star size={16} className="text-yellow-500" />
+              <span>
+                {RESTAURANT.rating} {"\u00B7"} {RESTAURANT.reviews.toLocaleString()}+ guests
+              </span>
+            </div>
+            <span className="text-gray-300">{"\u00B7"}</span>
+            <div className="flex items-center gap-1">
+              <MapPin size={16} className="text-gray-400" />
+              <span>{RESTAURANT.address}</span>
+            </div>
+            <span className="text-gray-300">{"\u00B7"}</span>
+            <div className="flex items-center gap-1">
+              <Clock size={16} className="text-gray-500" />
+              <span>House service: {RESTAURANT.hours}</span>
+            </div>
+          </div>
+
+          <div className="mt-5 space-y-3 text-sm font-medium">
+            <div className="flex items-center bg-gray-100 rounded-full px-1 py-1 shadow-inner heading-font border border-gray-200 w-full max-w-[360px]">
+              <button
+                onClick={() => setServiceType("table")}
+                className={`flex-1 px-4 py-1.5 rounded-full transition-all text-sm font-semibold ${
+                  serviceType === "table"
+                    ? "bg-white shadow text-black"
+                    : "text-gray-600"
+                }`}
+              >
+                Table service
+              </button>
+              <button
+                onClick={() => setServiceType("takeaway")}
+                className={`flex-1 px-4 py-1.5 rounded-full transition-all text-sm font-semibold ${
+                  serviceType === "takeaway"
+                    ? "bg-white shadow text-black"
+                    : "text-gray-600"
+                }`}
+              >
+                Take-away
+              </button>
+            </div>
+            <div className="flex justify-start">
+              <button
+                className="px-4 py-1.5 rounded-full border border-gray-200 text-gray-900 flex items-center gap-2 heading-font bg-gray-100 text-sm font-semibold min-w-[180px] justify-center shadow-inner"
+                onClick={() => {
+                  setHasViewedGroupOrder(true);
+                  if (hasViewedGroupOrder) {
+                    setShowGroupSummary(true);
+                  } else {
+                    setShowGroupOrder(true);
+                  }
+                }}
+              >
+                {hasViewedGroupOrder ? <Users size={16} /> : <User size={16} />}
+                {hasViewedGroupOrder ? "View group order" : "Group order"}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 text-sm subtext-font text-gray-700">
+            <div className="grid grid-cols-2 border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm divide-x divide-gray-200">
+              <div className="flex flex-col items-center justify-center py-4">
+                <p className="text-base font-semibold text-gray-900 heading-font">#{tableNumber}</p>
+                <p className="text-xs text-gray-500 mt-1">Current table</p>
+              </div>
+              <div className="flex flex-col items-center justify-center py-4">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} className="text-gray-500" />
+                  <p className="text-base font-semibold text-gray-900 heading-font">{RESTAURANT.servingTime}</p>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Average service time</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Scrollable Tabs (visible before sticky header takes over) */}
+      {!showStickyHeader && (
+        <div className="flex overflow-x-auto space-x-8 px-6 py-4 bg-white border-b">
+          {tabs.map(tab => (
+            <button
+              key={tab}
+              data-tab={tab}
+              onClick={() => handleTabClick(tab)}
+              className={`text-sm font-medium pb-2 border-b-2 whitespace-nowrap ${
+                scrollActiveTab === tab
+                  ? "border-black text-black heading-font"
+                  : "border-transparent text-gray-500 subtext-font"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* All Sections on One Page */}
+      <div className="px-4 pb-6">
+        {/* Deals Section */}
          <div ref={recommendedRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">DEALS.</h2>
           <div className="flex space-x-4 overflow-x-auto">
@@ -1539,7 +1972,7 @@ export default function Menu() {
                 />
               <div className="p-3">
                 <div className="font-bold text-xs mb-1">BUY ANY 7 DONUTS AND GET 1 CLASSIC FREE</div>
-                <div className="text-xs text-gray-500 mb-2">Pick any 7 and enjoy a classic donut on us — sweet, and simple!</div>
+                <div className="text-xs text-gray-500 mb-2">Pick any 7 and enjoy a classic donut on us - sweet, and simple!</div>
                 <div className="font-bold text-sm">From Rs.1,050/-</div>
               </div>
             </div>
@@ -1594,7 +2027,7 @@ export default function Menu() {
                />
                <div className="p-3">
                  <div className="font-bold text-xs mb-1">BOX OF 4</div>
-                 <div className="text-xs text-gray-500 mb-2">Pick any 4 donuts of your choice — perfect for sharing (or not).</div>
+                 <div className="text-xs text-gray-500 mb-2">Pick any 4 donuts of your choice - perfect for sharing (or not).</div>
                  <div className="font-bold text-sm">From Rs.600/-</div>
                </div>
              </div>
@@ -1618,7 +2051,7 @@ export default function Menu() {
                />
                <div className="p-3">
                  <div className="font-bold text-xs mb-1">BOX OF 8</div>
-                 <div className="text-xs text-gray-500 mb-2">Choose 8 of your favorites — more donuts, more happiness.</div>
+                 <div className="text-xs text-gray-500 mb-2">Choose 8 of your favorites - more donuts, more happiness.</div>
                  <div className="font-bold text-sm">From Rs.1,200/-</div>
                </div>
              </div>
@@ -1642,7 +2075,7 @@ export default function Menu() {
                />
                <div className="p-3">
                  <div className="font-bold text-xs mb-1">BOX OF 12</div>
-                 <div className="text-xs text-gray-500 mb-2">Go all in with a dozen — ideal for parties, gifts, or cravings.</div>
+                 <div className="text-xs text-gray-500 mb-2">Go all in with a dozen - ideal for parties, gifts, or cravings.</div>
                  <div className="font-bold text-sm">From Rs.1,800/-</div>
                </div>
              </div>
@@ -1656,77 +2089,47 @@ export default function Menu() {
                        {/* Classic Donuts */}
             <div className="mb-8">
               <h3 className="text-lg font-bold text-gray-800 mb-4">CLASSIC</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-3">
                               {/* Classic Donut Card 1 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Classic/Plain Chocolate.png"
                    alt="Plain Chocolate"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">PLAIN CHOCOLATE</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Rich, smooth chocolate glaze on a fluffy ring — a timeless classic for chocoholics.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.150/-</div>
-                     <SmartCounter 
-                       itemName="Plain Chocolate" 
-                       price={150} 
-                       image="/Classic/Plain Chocolate.png"
-                       cart={cart}
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemByName}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Plain Chocolate</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Rich, smooth chocolate glaze on a fluffy ring - a timeless classic for chocoholics.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
+                </div>
                </div>
 
                                                               {/* Classic Donut Card 2 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Classic/Plain Glaze.png"
                     alt="Plain Glaze"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">PLAIN GLAZED</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Light, airy, and melt-in-your-mouth sweet. Simplicity never tasted this good.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.150/-</div>
-                      <SmartCounter 
-                        itemName="Plain Glaze" 
-                        price={150} 
-                        image="/Classic/Plain Glaze.png"
-                        cart={cart}
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemByName}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Plain Glaze</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Light, airy, and melt-in-your-mouth sweet. Simplicity never tasted this good.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
+                </div>
                 </div>
 
                 {/* Classic Donut Card 3 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Classic/Strawberry Sprinkle.png"
                     alt="Strawberry Sprinkle"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">Strawberry Sprinkle</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Sweet strawberry icing topped with rainbow sprinkles — fun, fruity, and festive in every bite!</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.150/-</div>
-                      <SmartCounter 
-                        itemName="Strawberry Sprinkle" 
-                        price={150} 
-                        image="/Classic/Strawberry Sprinkle.png"
-                        cart={cart}
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemByName}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Strawberry Sprinkle</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Sweet strawberry icing topped with rainbow sprinkles - fun, fruity, and festive in every bite!</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
+                </div>
                 </div>
              </div>
            </div>
@@ -1734,167 +2137,103 @@ export default function Menu() {
                        {/* Delights Donuts */}
             <div className="mb-8">
               <h3 className="text-lg font-bold text-gray-800 mb-4">DELIGHTS</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-3">
                                                {/* Delights Donut Card 1 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/After Eight.png"
                     alt="After Eight"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">AFTER EIGHT</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Minty chocolate glaze drizzled with a fresh green swirl — the perfect post-dinner indulgence.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="After Eight" 
-                        price={240} 
-                        image="/Delights/After Eight.png"
-                        cart={cart}
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">After Eight</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Minty chocolate glaze drizzled with a fresh green swirl - the perfect post-dinner indulgence.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                                 {/* Delights Donut Card 2 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Coconut Truffle.png"
                     alt="Coconut Truffle"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">COCONUT TRUFFLE</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Coated in coconut glaze, topped with toasted flakes and a truffle center.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Coconut Truffle" 
-                        price={240} 
-                        image="/Delights/Coconut Truffle.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Coconut Truffle</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Coated in coconut glaze, topped with toasted flakes and a truffle center.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                                 {/* Delights Donut Card 3 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Cookies and Cream.png"
                     alt="Cookies and Cream"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">COOKIES AND CREAM</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Loaded with crushed Oreos and finished with a white glaze — every bite is cookies and bliss.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Cookies and Cream" 
-                        price={240} 
-                        image="/Delights/Cookies and Cream.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cookies and Cream</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Loaded with crushed Oreos and finished with a white glaze - every bite is cookies and bliss.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                                 {/* Delights Donut Card 4 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Ferrero Rocher.png"
                     alt="Ferrero Rocher"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">FERRERO ROCHER</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">A luxurious blend of hazelnut and chocolate topped with crunchy bits.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Ferrero Rocher" 
-                        price={240} 
-                        image="/Delights/Ferrero Rocher.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Ferrero Rocher</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">A luxurious blend of hazelnut and chocolate topped with crunchy bits.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                 {/* Delights Donut Card 5 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Nutella Bon.png"
                     alt="Nutella Bon"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">NUTELLA BON</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Luscious Nutella glaze with a chocolate swirl — rich, smooth, and utterly irresistible.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Nutella Bon" 
-                        price={240} 
-                        image="/Delights/Nutella Bon.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Nutella Bon</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Luscious Nutella glaze with a chocolate swirl - rich, smooth, and utterly irresistible.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                 {/* Delights Donut Card 6 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Oreo Chocolate.png"
                     alt="Oreo Chocolate"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">OREO CHOCOLATE</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Dusted in Oreo crumbs, striped with chocolate drizzle — a dark delight for cookie lovers.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Oreo Chocolate" 
-                        price={240} 
-                        image="/Delights/Oreo Chocolate.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Oreo Chocolate</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Dusted in Oreo crumbs, striped with chocolate drizzle - a dark delight for cookie lovers.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
 
                 {/* Delights Donut Card 7 */}
-                <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                   <img
                     src="/Delights/Salted Caramel.png"
                     alt="Salted Caramel"
-                    className="w-full h-48 object-contain flex-shrink-0"
-                  />
-                  <div className="p-4 flex flex-col flex-1">
-                    <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">SALTED CARAMEL</div>
-                    <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Golden caramel glaze with a hint of sea salt — sticky, sweet, and dangerously good.</div>
-                    <div className="flex flex-col space-y-2 mt-auto">
-                      <div className="font-bold text-base">Rs.240/-</div>
-                      <SmartCounter 
-                        itemName="Salted Caramel" 
-                        price={240} 
-                        image="/Delights/Salted Caramel.png"
-                        onAddToCart={addItemToCart}
-                        onRemoveFromCart={removeItemFromCart}
-                      />
-                    </div>
-                  </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Salted Caramel</div>
+                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Golden caramel glaze with a hint of sea salt - sticky, sweet, and dangerously good.</div>
+                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
+                </div>
                 </div>
              </div>
            </div>
@@ -1902,373 +2241,229 @@ export default function Menu() {
            {/* Premium Donuts */}
            <div className="mb-8">
              <h3 className="text-lg font-bold text-gray-800 mb-4">PREMIUM</h3>
-             <div className="grid grid-cols-2 gap-4">
+             <div className="space-y-3">
                {/* Premium Donut Card 1 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Bagelish.png"
                    alt="Bagelish"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">BAGELISH</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Savory cream cheese donut topped with dill, zaatar, and white sesame seeds.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Bagelish" 
-                       price={300} 
-                       image="/Premium/Bagelish.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Bagelish</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Savory cream cheese donut topped with dill, zaatar, and white sesame seeds.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 2 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Bavarian Cream.png"
                    alt="Bavarian Cream"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">BAVARIAN CREAM</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Vanilla-salt cream filled donut topped with rich chocolate, cream, and butter.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Bavarian Cream" 
-                       price={300} 
-                       image="/Premium/Bavarian Cream.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Bavarian Cream</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Vanilla-salt cream filled donut topped with rich chocolate, cream, and butter.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 3 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/benoffee.png"
                    alt="Benoffee"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">BENOFFEE</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Fluffy dulce de leche cream with banana caramel glaze and biscuit crumb topping.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Benoffee" 
-                       price={300} 
-                       image="/Premium/Benoffee.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Benoffee</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Fluffy dulce de leche cream with banana caramel glaze and biscuit crumb topping.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 4 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Blueberry Cream Cheese.png"
                    alt="Blueberry Cream Cheese"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">BLUEBERRY CREAM CHEESE</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Filled with white chocolate and cheese, topped with tangy blueberry and candy crumbs.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Blueberry Cream Cheese" 
-                       price={300} 
-                       image="/Premium/Blueberry Cream Cheese.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Blueberry Cream Cheese</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with white chocolate and cheese, topped with tangy blueberry and candy crumbs.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 5 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Choco Fudge.png"
                    alt="Choco Fudge"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">CHOCO FUDGE</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Creamy dark chocolate filled donut topped with milk, powder, and chocolate shavings.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Choco Fudge" 
-                       price={300} 
-                       image="/Premium/Choco Fudge.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Choco Fudge</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Creamy dark chocolate filled donut topped with milk, powder, and chocolate shavings.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 6 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Chocolate Malt.png"
                    alt="Chocolate Malt"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">CHOCOLATE MALT</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Malt-filled donut with dark chocolate, cream, and biscuit crumb topping.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Chocolate Malt" 
-                       price={300} 
-                       image="/Premium/Chocolate Malt.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Chocolate Malt</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Malt-filled donut with dark chocolate, cream, and biscuit crumb topping.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 7 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Hazelnutty.png"
                    alt="Hazelnutty"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">HAZELNUTTY</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Filled with rich Nutella and topped with icing sugar for hazelnut chocolate bliss.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Hazelnutty" 
-                       price={300} 
-                       image="/Premium/Hazelnutty.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Hazelnutty</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with rich Nutella and topped with icing sugar for hazelnut chocolate bliss.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 8 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Jammie.png"
                    alt="Jammie"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">JAMMIE</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Filled with cream diplomat and berry jam, topped with a dusting of icing sugar.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Jammie" 
-                       price={300} 
-                       image="/Premium/Jammie.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Jammie</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with cream diplomat and berry jam, topped with a dusting of icing sugar.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 9 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Jelly Donut.png"
                    alt="Jelly Donut"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">JELLY DONUT</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Asoft, fluffy donut, filled with strawberry jelly and topped with icing sugar.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Jelly Donut" 
-                       price={300} 
-                       image="/Premium/Jelly Donut.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Jelly Donut</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Asoft, fluffy donut, filled with strawberry jelly and topped with icing sugar.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 10 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Kinder Bueno.png"
                    alt="Kinder Bueno"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">KINDER BUENO</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Long donut filled with hazelnut white chocolate cream, Bueno glaze, and chocolate drizzle.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Kinder Bueno" 
-                       price={300} 
-                       image="/Premium/Kinder Bueno.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Kinder Bueno</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Long donut filled with hazelnut white chocolate cream, Bueno glaze, and chocolate drizzle.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 11 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Lemon Curd.png"
                    alt="Lemon Curd"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">LEMON CURD</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Tangy lemon cream filling topped with white chocolate and crunchy biscuit crumble.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Lemon Curd" 
-                       price={300} 
-                       image="/Premium/Lemon Curd.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Lemon Curd</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Tangy lemon cream filling topped with white chocolate and crunchy biscuit crumble.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 12 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Lotus.png"
                    alt="Lotus"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">LOTUS</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Filled with lotus spread, white chocolate, and cream, topped with crushed lotus and swirls.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Lotus" 
-                       price={300} 
-                       image="/Premium/Lotus.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Lotus</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with lotus spread, white chocolate, and cream, topped with crushed lotus and swirls.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 13 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Peanut Caramel.png"
                    alt="Peanut Caramel"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">PEANUT CARAMEL</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Salted caramel glaze with caramelized peanut bits, topped with chocolate drizzle.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Peanut Caramel" 
-                       price={300} 
-                       image="/Premium/Peanut Caramel.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Peanut Caramel</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Salted caramel glaze with caramelized peanut bits, topped with chocolate drizzle.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 14 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Pistachio Delight.png"
                    alt="Pistachio Delight"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">PISTACHIO DELIGHT</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Brioche donut with whipped pistachio cream, chocolate ganache, pistachio glaze, and piping.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Pistachio Delight" 
-                       price={300} 
-                       image="/Premium/Pistachio Delight.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Pistachio Delight</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Brioche donut with whipped pistachio cream, chocolate ganache, pistachio glaze, and piping.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
 
                {/* Premium Donut Card 15 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                  <img
                    src="/Premium/Rabri.png"
                    alt="Rabri"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">RABRI</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Filled with creamy rabri, topped with cardamom glaze, nuts, and rose petals.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Rabri" 
-                       price={300} 
-                       image="/Premium/Rabri.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Rabri</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with creamy rabri, topped with cardamom glaze, nuts, and rose petals.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div> 
 
                {/* Premium Donut Card 16 */}
-               <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>    
+               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>    
                  <img
                    src="/Premium/Red velvet Donut.png"
                    alt="Red Velvet"
-                   className="w-full h-48 object-contain flex-shrink-0"
-                 />
-                 <div className="p-4 flex flex-col flex-1">
-                   <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">RED VELVET</div>
-                   <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Brioche donut topped with cream cheese frosting, red velvet cake, and icing sugar.</div>
-                   <div className="flex flex-col space-y-2 mt-auto">
-                     <div className="font-bold text-base">Rs.300/-</div>
-                     <SmartCounter 
-                       itemName="Red Velvet" 
-                       price={300} 
-                       image="/Premium/Red Velvet.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                   </div>
-                 </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Red Velvet</div>
+                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Brioche donut topped with cream cheese frosting, red velvet cake, and icing sugar.</div>
+                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
+                </div>
                </div>
              </div>
            </div>
@@ -2277,74 +2472,47 @@ export default function Menu() {
                  {/* Sandwiches Section */}
          <div ref={sandwichesRef} className="py-12">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SANDWICHES.</h2>
-           <div className="grid grid-cols-2 gap-4">
+           <div className="space-y-3">
              {/* Sandwich Card 1 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Sandwiches/Chicken Malai Boti.png"
                  alt="Chicken Malai Boti"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">CHICKEN MALAI BOTI</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Smoked BBQ boti, Cream, Black olives, Good as is or Grilled.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Chicken Malai Boti" 
-                       price={450} 
-                       image="/Sandwiches/Chicken Malai Boti.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Chicken Malai Boti</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Smoked BBQ boti, Cream, Black olives, Good as is or Grilled.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
+                </div>
              </div>
 
              {/* Sandwich Card 2 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Sandwiches/Club Sandwich.png"
                  alt="Club Sandwich"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">Club Sandwich</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Triple-layer sandwich with boiled egg, grilled chicken, lettuce, and cucumber.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Club Sandwich" 
-                       price={450} 
-                       image="/Sandwiches/Club Sandwich.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Club Sandwich</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Triple-layer sandwich with boiled egg, grilled chicken, lettuce, and cucumber.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
+                </div>
              </div>
 
              {/* Sandwich Card 3 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Sandwiches/Cubano.png"
                  alt="Cubano"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">CUBANO</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Chicken pastrami, lettuce, and cheese — best enjoyed grilled.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Cubano" 
-                       price={450} 
-                       image="/Sandwiches/Cubano.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cubano</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Chicken pastrami, lettuce, and cheese - best enjoyed grilled.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
+                </div>
              </div>
            </div>
          </div>
@@ -2352,51 +2520,33 @@ export default function Menu() {
                  {/* Salads Section */}
          <div ref={saladsRef} className="py-12">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SALADS.</h2>
-           <div className="grid grid-cols-2 gap-4">
+           <div className="space-y-3">
              {/* Salad Card 1 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Salads/Mediteranian Salad.png"
                  alt="Mediteranian Salad"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">MEDITERANIAN SALAD</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Fresh Mediterranean salad with cucumbers, tomatoes, olives, and a zesty dressing.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Mediteranian Salad" 
-                       price={350} 
-                       image="/Salads/Mediteranian Salad.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Mediteranian Salad</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Fresh Mediterranean salad with cucumbers, tomatoes, olives, and a zesty dressing.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.350/-</div>
+                </div>
              </div>
 
              {/* Salad Card 2 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Salads/Asian Satay Salad.png"
                  alt="Asian Satay Salad"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">ASIAN SATAY SALAD</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">MCrisp salad with grilled chicken, peanuts, veggies, and tangy satay dressing.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Asian Satay Salad" 
-                       price={350} 
-                       image="/Salads/Asian Satay Salad.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Asian Satay Salad</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">MCrisp salad with grilled chicken, peanuts, veggies, and tangy satay dressing.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.350/-</div>
+                </div>
              </div>
            </div>
          </div>
@@ -2404,147 +2554,674 @@ export default function Menu() {
                  {/* Drinks Section */}
          <div ref={drinksRef} className="py-12">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">DRINKS.</h2>
-           <div className="grid grid-cols-2 gap-4">
+           <div className="space-y-3">
              {/* Drink Card 1 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Peach Iced Tea"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">PEACH ICED TEA</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Sweetened with peach syrup, steeped in tea leaves, the perfect drink for a refreshing experience.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Peach Iced Tea" 
-                       price={180} 
-                       image="/Drinks/Peach Iced Tea.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemByName}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Peach Iced Tea</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Sweetened with peach syrup, steeped in tea leaves, the perfect drink for a refreshing experience.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
+                </div>
              </div>
 
              {/* Drink Card 2 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Mix Tea Karak"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">MIX TEA KARAK</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Strong black tea with full-cream milk and sugar — rich, sweet, and bold.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Mix Tea Karak" 
-                       price={180} 
-                       image="/Drinks/Mix Tea Karak.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemByName}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Mix Tea Karak</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Strong black tea with full-cream milk and sugar - rich, sweet, and bold.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
+                </div>
              </div>
 
              {/* Drink Card 3 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Earl Grey Tea"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">EARL GREY TEA</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Smooth black tea with bergamot — light, citrusy, and perfectly fragrant.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Earl Grey Tea" 
-                       price={180} 
-                       image="/Drinks/Earl Grey Tea.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemByName}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Earl Grey Tea</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Smooth black tea with bergamot - light, citrusy, and perfectly fragrant.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
+                </div>
              </div>
 
              {/* Drink Card 4 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Masala Tea"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">MASALA TEA</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Bold and creamy chai with strong tea, milk, sugar, and traditional spices.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                  <SmartCounter 
-                       itemName="Masala Tea" 
-                       price={180} 
-                       image="/Drinks/Masala Tea.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                 <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Masala Tea</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Bold and creamy chai with strong tea, milk, sugar, and traditional spices.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
+                </div>
              </div>
 
              {/* Drink Card 5 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Rose Hibiscus"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">ROSE HIBISCUS</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Light pink tea with rose and hibiscus, floral with a slight tang.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Rose Hibiscus" 
-                       price={180} 
-                       image="/Drinks/Rose Hibiscus.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Rose Hibiscus</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Light pink tea with rose and hibiscus, floral with a slight tang.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
+                </div>
              </div>
 
              {/* Drink Card 6 */}
-             <div className="bg-cover bg-center rounded-lg shadow-lg overflow-hidden flex flex-col h-full" style={{ backgroundImage: 'url(/Background.png)' }}>
+             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
                <img
                  src="/Drinks/Drink.png"
                  alt="Cold Chocolate Milk"
-                 className="w-full h-48 object-contain flex-shrink-0"
-               />
-               <div className="p-4 flex flex-col flex-1">
-                 <div className="font-bold text-base mb-2 min-h-[2.5rem] line-clamp-2">COLD CHOCOLATE MILK</div>
-                 <div className="text-xs text-gray-600 mb-3 line-clamp-2 flex-1">Thick full-cream chocolate milk, ice cold, rich, and perfectly creamy.</div>
-                 <div className="flex flex-col space-y-2 mt-auto">
-                   <div className="font-bold text-base">Rs.450/-</div>
-                                        <SmartCounter 
-                       itemName="Cold Chocolate Milk" 
-                       price={180} 
-                       image="/Drinks/Cold Chocolate Milk.png"
-                       onAddToCart={addItemToCart}
-                       onRemoveFromCart={removeItemFromCart}
-                     />
-                 </div>
-               </div>
+                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                />
+                  <div className="flex flex-col flex-1 gap-1">
+                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cold Chocolate Milk</div>
+                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Thick full-cream chocolate milk, ice cold, rich, and perfectly creamy.</div>
+                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
+                </div>
              </div>
-           </div>
-         </div>
       </div>
+    </div>
+  </div>
+
+      {/* Group Order Modal */}
+      <AnimatePresence>
+        {showGroupOrder && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black/50 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowGroupOrder(false)}
+            />
+            <motion.div
+              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="relative">
+                <img src="/Grouporder.png" alt="Group order" className="w-full h-60 object-cover" />
+                <button
+                  onClick={() => setShowGroupOrder(false)}
+                  className="absolute top-4 left-4 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
+                >
+                  <X size={22} className="text-gray-800" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                <div className="space-y-1">
+                  <p className="text-2xl font-semibold text-gray-900 heading-font normal-case">{RESTAURANT.name} group order</p>
+                  <p className="text-sm text-gray-700 subtext-font">From <span className="font-semibold heading-font">{RESTAURANT.name}</span></p>
+                  <p className="text-sm text-gray-700 subtext-font">Deliver to <span className="font-semibold heading-font">your table</span></p>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                      <Clock size={18} />
+                    </div>
+                    <div className="flex-1 border-b pb-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-base font-semibold text-gray-900 heading-font">People can order at any time</p>
+                        <MoreHorizontal size={18} className="text-gray-400" />
+                      </div>
+                      <p className="text-sm text-gray-500 subtext-font mt-1">No deadline set</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                      <Wallet size={18} />
+                    </div>
+                    <button
+                      className="flex-1 border-b pb-4 text-left"
+                      onClick={() => setShowWhoPays(true)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-base font-semibold text-gray-900 heading-font">
+                          {whoPaysSelection === "all"
+                            ? "You pay for everyone"
+                            : whoPaysSelection === "custom"
+                            ? "You pay a custom amount"
+                            : "Everyone pays for themselves"}
+                        </p>
+                        <Pencil size={16} className="text-gray-500" />
+                      </div>
+                      <p className="text-sm text-gray-500 subtext-font mt-1">
+                        {whoPaysSelection === "all" && spendingLimit
+                          ? `Spending limit: Rs.${spendingLimit}/-`
+                          : whoPaysSelection === "all"
+                          ? "You cover the full bill"
+                          : whoPaysSelection === "custom"
+                          ? `Paying Rs.${customPayAmount || "0"}/-`
+                          : "Up to 18 people"}
+                      </p>
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+
+              <div className="bg-white border-t p-4">
+                <button
+                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                  onClick={() => setShowInviteModal(true)}
+                >
+                  Invite people
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Who Pays Modal */}
+      <AnimatePresence>
+        {showWhoPays && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black/50 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowWhoPays(false)}
+            />
+            <motion.div
+              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="p-4">
+                <div className="flex items-center gap-3">
+                  <button onClick={() => setShowWhoPays(false)} className="p-2 rounded-full hover:bg-gray-100">
+                    <ChevronLeft size={22} />
+                  </button>
+                  <div className="space-y-2">
+                    <p className="text-2xl font-semibold text-gray-900 heading-font">Choose who pays</p>
+                    <p className="text-sm text-gray-600 subtext-font">
+                      Pay for the whole order or let each person pay for themselves. Payment methods are charged when the order is placed.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                <div className="px-4 space-y-4 pb-8">
+                  <button
+                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "all" ? "border-black" : "border-gray-200"}`}
+                    onClick={() => setWhoPaysSelection("all")}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                          <Wallet size={18} />
+                        </div>
+                        <p className="text-base font-semibold text-gray-900 heading-font">You pay for everyone</p>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "all" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
+                        {whoPaysSelection === "all" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 subtext-font mt-2">You cover the full bill.</p>
+                    {whoPaysSelection === "all" && (
+                      <div className="mt-3 space-y-2">
+                        <label className="block text-sm font-semibold text-gray-800 heading-font">Spending limit (optional)</label>
+                        <div className="flex items-center rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                          <span className="text-gray-700 mr-2">Rs.</span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={spendingLimit}
+                            onChange={(e) => setSpendingLimit(e.target.value.replace(/\\D/g, ""))}
+                            placeholder="Enter limit"
+                            className="flex-1 bg-transparent focus:outline-none text-sm subtext-font"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </button>
+
+                  <button
+                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "custom" ? "border-black" : "border-gray-200"}`}
+                    onClick={() => setWhoPaysSelection("custom")}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                          <Wallet size={18} />
+                        </div>
+                        <p className="text-base font-semibold text-gray-900 heading-font">You pay a custom amount</p>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "custom" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
+                        {whoPaysSelection === "custom" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600 subtext-font mt-2">Set a custom contribution.</p>
+                    {whoPaysSelection === "custom" && (
+                      <div className="mt-3">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={customPayAmount}
+                          onChange={(e) => setCustomPayAmount(e.target.value.replace(/\\D/g, ""))}
+                          placeholder="Enter amount"
+                          className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm subtext-font focus:outline-none focus:ring-2 focus:ring-black/60"
+                        />
+                      </div>
+                    )}
+                  </button>
+
+                  <button
+                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "self" ? "border-black" : "border-gray-200"}`}
+                    onClick={() => setWhoPaysSelection("self")}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                          <Users size={18} />
+                        </div>
+                        <div>
+                          <p className="text-base font-semibold text-gray-900 heading-font">Everyone pays for themselves</p>
+                          <p className="text-sm text-gray-600 subtext-font">Up to 18 people</p>
+                        </div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "self" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
+                        {whoPaysSelection === "self" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white border-t p-4">
+                <button
+                  className={`w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font ${
+                    whoPaysSelection === "custom" && !customPayAmount ? "opacity-60 cursor-not-allowed" : ""
+                  }`}
+                  onClick={() => {
+                    if (whoPaysSelection === "custom" && !customPayAmount) {
+                      setWhoPaysError("Enter an amount to continue");
+                      return;
+                    }
+                    setWhoPaysError("");
+                    setShowWhoPays(false);
+                  }}
+                  disabled={whoPaysSelection === "custom" && !customPayAmount}
+                >
+                  Save
+                </button>
+                {whoPaysError && (
+                  <p className="text-red-600 text-xs mt-2 subtext-font">{whoPaysError}</p>
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Item Detail Modal */}
+      <AnimatePresence>
+        {showItemModal && selectedItem && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black/50 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={handleCloseItemModal}
+            />
+            <motion.div
+              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="relative">
+                {selectedItem.image && (
+                  <img
+                    src={selectedItem.image}
+                    alt={selectedItem.name}
+                    className="w-full h-56 object-cover"
+                  />
+                )}
+                <button
+                  onClick={handleCloseItemModal}
+                  className="absolute top-4 left-4 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
+                >
+                  <X size={22} className="text-gray-800" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-5 space-y-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-2xl font-semibold text-gray-900 heading-font normal-case">
+                        {selectedItem.name}
+                      </p>
+                      <p className="text-lg font-semibold text-gray-900 heading-font mt-1">
+                        Rs.{(selectedItem.price || 0).toLocaleString()}/-
+                      </p>
+                    </div>
+                  </div>
+
+                  {selectedItem.description && (
+                    <p className="text-sm text-gray-600 subtext-font">{selectedItem.description}</p>
+                  )}
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center rounded-full bg-gray-100 px-3 py-2">
+                      <button
+                        onClick={() => setItemQuantity((q) => Math.max(1, q - 1))}
+                        className="w-8 h-8 flex items-center justify-center text-gray-700"
+                      >
+                        <Minus size={18} />
+                      </button>
+                      <span className="mx-3 text-base font-semibold heading-font">{itemQuantity}</span>
+                      <button
+                        onClick={() => setItemQuantity((q) => q + 1)}
+                        className="w-8 h-8 flex items-center justify-center text-gray-700"
+                      >
+                        <Plus size={18} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t">
+                    <p className="text-lg font-semibold text-gray-900 heading-font mb-3">
+                      Frequently bought together
+                    </p>
+                    <div className="space-y-3">
+                      {getSuggestedItems(selectedItem.name).map(suggestion => (
+                        <button
+                          key={suggestion.name}
+                          className="flex items-center gap-4 w-full text-left"
+                          onClick={() => openItemDetailFromData(suggestion)}
+                        >
+                          <img
+                            src={suggestion.image}
+                            alt={suggestion.name}
+                            className="w-20 h-20 rounded-xl object-cover"
+                          />
+                          <div className="flex-1">
+                            <p className="text-base font-semibold text-gray-900 heading-font normal-case">
+                              {suggestion.name}
+                            </p>
+                            <p className="text-sm text-gray-600 subtext-font">
+                              Rs.{(resolvePrice(suggestion.name, suggestion.price) || 0).toLocaleString()}/-
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border-t p-4">
+                <button
+                  onClick={handleAddSelectedItem}
+                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                >
+                  Add {itemQuantity} to order • Rs.{((selectedItem.price || 0) * itemQuantity).toLocaleString()}/-
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Invite Modal */}
+      <AnimatePresence>
+        {showInviteModal && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-black/50 z-40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowInviteModal(false)}
+            />
+            <motion.div
+              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="p-4 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <p className="text-2xl font-semibold text-gray-900 heading-font">Invite people</p>
+                  </div>
+                  <button
+                    onClick={() => setShowInviteModal(false)}
+                    className="p-2 rounded-full hover:bg-gray-100"
+                  >
+                    <X size={22} />
+                  </button>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    className="flex-1 rounded-2xl bg-gray-100 text-gray-900 px-4 py-3 flex items-center justify-center gap-2 heading-font"
+                    onClick={() => {
+                      const inviteLink = `${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`;
+                      copyToClipboard(inviteLink);
+                    }}
+                  >
+                    <Link2 size={16} />
+                    Copy link
+                  </button>
+                  <button
+                    className="flex-1 rounded-2xl bg-gray-100 text-gray-900 px-4 py-3 flex items-center justify-center gap-2 heading-font"
+                    onClick={() => {
+                      const inviteLink = `${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`;
+                      if (navigator.share) {
+                        navigator.share({ title: `${RESTAURANT.name} group order`, url: inviteLink }).catch(() => {});
+                      } else {
+                        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(inviteLink)}`, '_blank');
+                      }
+                    }}
+                  >
+                    <MoreHorizontal size={16} />
+                    More
+                  </button>
+                </div>
+
+                <div className="border-t" />
+
+                <div className="flex justify-center">
+                  <div className="w-64 h-64 bg-white flex items-center justify-center">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`)}`}
+                      alt="Invite QR"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-auto bg-white border-t p-4">
+                <button
+                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                  onClick={() => setShowInviteModal(false)}
+                >
+                  Done
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Join via invite page */}
+      <AnimatePresence>
+        {showJoinPage && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-white z-50 flex flex-col"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-500 subtext-font">Join group order?</p>
+                </div>
+                <button onClick={() => setShowJoinPage(false)} className="p-2 rounded-full hover:bg-gray-100">
+                  <X size={22} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-5 space-y-6 pb-6">
+                <div className="flex items-center justify-center">
+                  <img src="/Grouporder.png" alt="Group order" className="w-64 h-40 object-contain" />
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-3xl font-semibold text-gray-900 heading-font">Join {RESTAURANT.name} group order?</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 border-b pb-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                      <MapPin size={16} />
+                    </div>
+                    <div>
+                      <p className="text-base font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
+                      <p className="text-sm text-gray-600 subtext-font">Table {tableNumber}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 border-b pb-3">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
+                      <Wallet size={16} />
+                    </div>
+                    <div>
+                      <p className="text-base font-semibold text-gray-900 heading-font">
+                        {whoPaysSelection === "all"
+                          ? "Host pays for this order"
+                          : whoPaysSelection === "custom"
+                          ? `Host contributes Rs.${customPayAmount || "0"}/-`
+                          : "Everyone pays for themselves"}
+                      </p>
+                      <p className="text-sm text-gray-600 subtext-font">
+                        {whoPaysSelection === "all" && spendingLimit ? `Limit Rs.${spendingLimit}/-` : ""}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border-t p-4">
+                <button
+                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                  onClick={() => setShowJoinPage(false)}
+                >
+                  Join order
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Group order summary view */}
+      <AnimatePresence>
+        {showGroupSummary && (
+          <>
+            <motion.div
+              className="fixed inset-0 bg-white z-50 flex flex-col"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 30 }}
+            >
+              <div className="p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-2xl font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
+                  <p className="text-sm text-gray-600 subtext-font">Table {tableNumber}</p>
+                </div>
+                <button onClick={() => setShowGroupSummary(false)} className="p-2 rounded-full hover:bg-gray-100">
+                  <X size={22} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-5 space-y-4 pb-4">
+                {renderGroupSummaryItems()}
+
+                <button
+                  onClick={() => setShowGroupSummary(false)}
+                  className="mt-4 flex items-center gap-2 text-black font-semibold heading-font"
+                >
+                  <Plus size={18} />
+                  Add items
+                </button>
+
+                <div className="border-t pt-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                    <span>Subtotal</span>
+                    <span className="font-semibold text-gray-900">Rs.{getCartTotal()}/-</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                    <span>Service fee (1%)</span>
+                    <span className="font-semibold text-gray-900">Rs.{getServiceFee()}/-</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                    <span>GST (5%)</span>
+                    <span className="font-semibold text-gray-900">Rs.{getGstAmount()}/-</span>
+                  </div>
+                  <div className="flex items-center justify-between text-base font-bold text-gray-900 heading-font pt-2">
+                    <span>Total</span>
+                    <span>Rs.{(getCartTotal() + getServiceFee() + getGstAmount()).toLocaleString()}/-</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border-t p-4">
+                <button
+                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                  onClick={() => {
+                    setShowGroupSummary(false);
+                    setShowCart(true);
+                  }}
+                >
+                  Go to checkout
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Donut Selection Modal */}
       <AnimatePresence>
@@ -2602,7 +3279,7 @@ export default function Menu() {
                 </div>
 
                 {/* Donut Grid */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-3">
                   {donutOptions.map((donut, index) => (
                     <div
                       key={index}
@@ -2844,186 +3521,97 @@ export default function Menu() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end"
-            onClick={() => setShowCart(false)}
+            className="fixed inset-0 z-50 flex flex-col bg-white"
           >
-            <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="bg-white rounded-t-3xl w-full max-h-[85vh] flex flex-col"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Modal Header */}
-              <div 
-                className="flex items-center justify-between p-4 border-b flex-shrink-0 relative overflow-hidden"
-                style={{
-                  backgroundImage: 'url(/public/Background.png)',
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center top',
-                  backgroundRepeat: 'no-repeat'
+            <div className="p-4 flex items-center justify-between">
+              <button onClick={() => setShowCart(false)} className="p-2 rounded-full bg-gray-100">
+                <X size={20} />
+              </button>
+              <div className="text-lg font-semibold heading-font">{RESTAURANT.name}</div>
+              <button
+                className="p-2 rounded-full bg-gray-100"
+                onClick={() => {
+                  setHasViewedGroupOrder(true);
+                  setShowCart(false);
+                  setShowGroupOrder(true);
                 }}
               >
-                {/* Background overlay for better text readability */}
-                <div className="absolute inset-0 bg-black bg-opacity-30"></div>
-                
-                {/* Header content */}
-                <div className="relative z-10 flex items-center justify-between w-full">
-                  <h2 className="text-xl font-bold text-white">Your Cart</h2>
-                  <button
-                    onClick={() => setShowCart(false)}
-                    className="p-2 hover:bg-white hover:bg-opacity-20 rounded-full transition-colors"
-                  >
-                    <X size={24} className="text-white" />
-                  </button>
-                </div>
+                <Users size={18} />
+              </button>
+            </div>
+
+            <div className="px-5 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <p className="text-2xl font-bold heading-font">{RESTAURANT.name}</p>
+                <p className="text-lg text-gray-600 subtext-font">Table {tableNumber}</p>
               </div>
 
-              {/* Cart Content */}
-              <div className="flex-1 overflow-y-auto p-4">
+              <div className="space-y-4">
                 {Object.keys(cart).length === 0 ? (
-                  <div className="text-center py-8">
-                    <ShoppingCart size={48} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-500">Your cart is empty</p>
-                  </div>
+                  <p className="text-center text-gray-500 py-10">Your cart is empty</p>
                 ) : (
-                  <div className="space-y-4">
-                    {(() => {
-                      const userGroups = getCartItemsByUser();
-                      return Object.entries(userGroups).map(([user, items]) => (
-                        <div key={user} className="space-y-3">
-                          {/* User Title */}
-                          <div className="flex items-center space-x-2">
-                            <div className={`w-3 h-3 rounded-full ${user === userId ? 'bg-green-500' : 'bg-blue-500'}`}></div>
-                            <h3 className="font-semibold text-sm">
-                              {user === userId ? 'Your Items' : `User ${user}`}
-                            </h3>
-                          </div>
-                          
-                          {/* Items for this user */}
-                          {items.map((item, index) => (
-                            <div key={`${user}-${index}`} className="flex items-center justify-between p-3 border rounded-lg ml-4">
-                              <div className="flex items-center space-x-3">
-                                {item.image && (
-                                  <img src={item.image} alt={item.name} className="w-12 h-12 object-contain" />
-                                )}
-                                <div>
-                                  <h3 className="font-semibold">{item.name}</h3>
-                                  <p className="text-sm text-gray-600">Rs.{item.price}/-</p>
-                                  {item.details && (
-                                    <p className="text-xs text-gray-500 mt-1">{item.details}</p>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center space-x-2">
-                                <button
-                                  onClick={() => removeItemFromCart(`${item.name}_${item.addedBy}`)}
-                                  disabled={!canModifyItem(`${item.name}_${item.addedBy}`)}
-                                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                    canModifyItem(`${item.name}_${item.addedBy}`)
-                                      ? 'bg-gray-200 hover:bg-gray-300'
-                                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                  }`}
-                                >
-                                  <Minus size={16} />
-                                </button>
-                                <span className="font-semibold w-8 text-center">{item.quantity}</span>
-                                <button
-                                  onClick={() => addItemToCart(item.name, item.price, item.image, item.details)}
-                                  disabled={!canModifyItem(`${item.name}_${item.addedBy}`)}
-                                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                                    canModifyItem(`${item.name}_${item.addedBy}`)
-                                      ? 'bg-gray-200 hover:bg-gray-300'
-                                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                  }`}
-                                >
-                                  <Plus size={16} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
+                  Object.entries(cart).map(([key, item]) => (
+                    <div key={key} className="flex items-center justify-between pb-4 border-b">
+                      <div className="flex items-center gap-3">
+                        {item.image && (
+                          <img src={item.image} alt={item.name} className="w-14 h-14 rounded-lg object-cover" />
+                        )}
+                        <div>
+                          <p className="text-lg font-semibold text-gray-900 heading-font">{item.name}</p>
+                          <p className="text-base text-gray-700 subtext-font">Rs.{item.price}/-</p>
                         </div>
-                      ));
-                    })()}
-                  </div>
-                )}
-              </div>
-
-              {/* Cart Footer */}
-              {Object.keys(cart).length > 0 && (
-                <div className="p-4 border-t bg-gray-50 flex-shrink-0">
-                  {/* Tip Selection */}
-                  <div className="mb-3">
-                    <h3 className="text-xs font-semibold mb-2">Add a Tip</h3>
-                    <div className="grid grid-cols-4 gap-1">
-                      {[0, 5, 10, 15].map((tip) => (
-                        <button
-                          key={tip}
-                          onClick={() => {
-                            setSelectedTip(tip);
-                            localStorage.setItem(getTipKey(), tip.toString());
-                          }}
-                          className={`relative p-2 rounded border border-black transition-all duration-300 ${
-                            selectedTip === tip
-                              ? 'bg-black text-white'
-                              : 'bg-gray-100 text-black hover:bg-gray-200'
-                          }`}
-                        >
-                          <span className="font-semibold text-xs">{tip}%</span>
-                          {selectedTip !== tip && (
-                            <div className="absolute bottom-0.5 right-0.5 w-1.5 h-1.5 bg-black transform rotate-45"></div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  {/* Bill Summary */}
-                  <div className="space-y-2 mb-3">
-                    <div className="flex justify-between text-sm">
-                      <span>Subtotal:</span>
-                      <span>Rs.{getCartTotal()}/-</span>
-                    </div>
-                    {selectedTip > 0 && (
-                      <div className="flex justify-between text-sm">
-                        <span>Tip ({selectedTip}%):</span>
-                        <span>Rs.{getTipAmount()}/-</span>
                       </div>
-                    )}
-                    <div className="flex justify-between text-lg font-bold border-t pt-2">
-                      <span>Total:</span>
-                      <span>Rs.{getTotalWithTip()}/-</span>
+                      <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1.5">
+                        <button onClick={() => removeItemFromCart(key)} className="p-1">
+                          <Minus size={16} />
+                        </button>
+                        <span className="text-base font-semibold heading-font">{item.quantity}</span>
+                        <button
+                          onClick={() => addItemToCart(item.name, item.price, item.image, item.details)}
+                          className="p-1"
+                        >
+                          <Plus size={16} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => {
-                        // Lock session if in collaborative mode
-                        if (isCollaborativeSession) {
-                          lockSession();
-                        }
-                        // Show payment method popup for Pay Fully
-                        setShowPaymentMethod(true);
-                      }}
-                      className="bg-black text-white py-3 rounded-lg font-semibold hover:bg-gray-800 transition-colors"
-                    >
-                      Pay Fully
-                    </button>
-                    <button
-                      onClick={() => {
-                        // Show split options popup
-                        setShowSplitOptions(true);
-                      }}
-                      className="bg-white text-black border-2 border-black py-3 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
-                    >
-                      Split Bill
-                    </button>
-                  </div>
-                </div>
-              )}
-            </motion.div>
+                  ))
+                )}
+                <button
+                  onClick={() => setShowCart(false)}
+                  className="flex items-center gap-2 text-black font-semibold heading-font"
+                >
+                  <Plus size={18} /> Add items
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-auto border-t px-5 py-4 space-y-2">
+              <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                <span>Subtotal</span>
+                <span className="font-semibold text-gray-900 heading-font">Rs.{getCartTotal()}/-</span>
+              </div>
+              <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                <span>Service fee (1%)</span>
+                <span className="font-semibold text-gray-900 heading-font">Rs.{getServiceFee()}/-</span>
+              </div>
+              <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
+                <span>GST (5%)</span>
+                <span className="font-semibold text-gray-900 heading-font">Rs.{getGstAmount()}/-</span>
+              </div>
+              <div className="flex items-center justify-between text-base font-bold text-gray-900 heading-font pt-2">
+                <span>Total</span>
+                <span>Rs.{getGrandTotal().toLocaleString()}/-</span>
+              </div>
+            </div>
+
+            <div className="bg-white border-t p-4">
+              <button
+                onClick={() => setShowCart(false)}
+                className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+              >
+                Go to checkout
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -3071,7 +3659,7 @@ export default function Menu() {
                       localStorage.setItem('splitType', 'equal');
                       setShowSplitOptions(false);
                       setShowCart(false);
-                      window.location.href = `/Crusteez/Table${tableNumber}/checkout/split-bill`;
+                      window.location.href = `/checkout/split-bill${tableQuery}`;
                     }}
                     className="w-full p-4 rounded-lg border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors text-left"
                   >
@@ -3092,7 +3680,7 @@ export default function Menu() {
                       setSplitType('custom');
                       setShowSplitOptions(false);
                       setShowCart(false);
-                      window.location.href = `/Crusteez/Table${tableNumber}/checkout/split-bill`;
+                      window.location.href = `/checkout/split-bill${tableQuery}`;
                     }}
                     className="w-full p-4 rounded-lg border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors text-left"
                   >
@@ -3109,7 +3697,7 @@ export default function Menu() {
                       setSplitType('by-item');
                       setShowSplitOptions(false);
                       setShowCart(false);
-                      window.location.href = `/Crusteez/Table${tableNumber}/checkout/split-bill`;
+                      window.location.href = `/checkout/split-bill${tableQuery}`;
                     }}
                     className="w-full p-4 rounded-lg border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100 transition-colors text-left"
                   >
@@ -3125,169 +3713,203 @@ export default function Menu() {
         )}
       </AnimatePresence>
 
-      {/* Payment Method Popup for Pay Fully */}
+      {/* Payment Method Page for Pay Fully */}
       <AnimatePresence>
         {showPaymentMethod && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center"
-            onClick={() => setShowPaymentMethod(false)}
+            className="fixed inset-0 z-50 flex flex-col bg-white"
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="bg-white rounded-2xl w-full max-w-xs mx-4 overflow-hidden max-h-[85vh] overflow-y-auto"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Modal Header */}
-              <div className="flex items-center justify-between p-4 border-b">
-                <h2 className="text-xl font-bold">Payment</h2>
-                <button
-                  onClick={() => setShowPaymentMethod(false)}
-                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-3 space-y-3">
-                {/* Bill Amount */}
-                <div className="text-center">
-                  <div className="bg-gray-800 rounded-lg shadow-2xl p-3 inline-block min-w-[180px] border-2 border-gray-700 transform rotate-1 hover:rotate-0 transition-transform duration-300">
-                    <div className="text-lg font-bold text-white mb-1 drop-shadow-lg">
-                      Rs.{getTotalWithTip().toFixed(2)}/-
-                    </div>
-                    <div className="text-xs text-gray-300 drop-shadow-md">
-                      Total Amount
-                    </div>
-                  </div>
-                </div>
-
-                {/* Payment Method */}
-                <div className="bg-white rounded-lg shadow-sm p-3 relative overflow-hidden">
-                  <div 
-                    className="absolute inset-0"
-                    style={{
-                      backgroundImage: 'url(/Background.png)',
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      backgroundRepeat: 'no-repeat'
+            <div className="relative h-48 bg-cover bg-center" style={{ backgroundImage: "url(/HeroImage.jpg)" }}>
+              <div className="absolute inset-0 bg-black/50" />
+              <div className="relative z-10 flex flex-col justify-between h-full p-6 text-white">
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => {
+                      setShowPaymentMethod(false);
+                      setShowCart(true);
                     }}
-                  ></div>
-                  <div className="relative z-10">
-                    <h3 className="text-sm font-semibold mb-2 text-center">PAYMENT METHOD</h3>
-                    
-                    {/* Digital Wallets */}
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      <button 
-                        onClick={() => setSelectedPaymentMethod(selectedPaymentMethod === 'easypaisa' ? null : 'easypaisa')}
-                        className={`p-4 rounded-lg border-2 transition-all duration-200 ${
-                          selectedPaymentMethod === 'easypaisa'
-                            ? 'border-pink-500 bg-white shadow-lg transform scale-105'
-                            : 'border-black bg-white hover:border-pink-300 hover:shadow-md'
-                        } ${selectedPaymentMethod !== 'easypaisa' ? '!border-black' : ''}`}
-                      >
-                        <div className="flex items-center justify-center">
-                          <img src="/Easypaisa.png" alt="easypaisa" className="h-6 w-auto" />
-                        </div>
-                      </button>
-                      
-                      <button 
-                        onClick={() => setSelectedPaymentMethod(selectedPaymentMethod === 'jazzcash' ? null : 'jazzcash')}
-                        className={`p-4 rounded-lg border-2 transition-all duration-200 ${
-                          selectedPaymentMethod === 'jazzcash'
-                            ? 'border-pink-500 bg-white shadow-lg transform scale-105'
-                            : 'border-black bg-white hover:border-pink-300 hover:shadow-md'
-                        } ${selectedPaymentMethod !== 'jazzcash' ? '!border-black' : ''}`}
-                      >
-                        <div className="flex items-center justify-center">
-                          <img src="/JazzCash.png" alt="JazzCash" className="h-12 w-auto" />
-                        </div>
-                      </button>
-                    </div>
-                    
-                    {/* Card Logos */}
-                    <div className="flex justify-center space-x-2 mb-3">
-                      <img src="/Visa.png" alt="VISA" className="h-8 w-auto" />
-                      <img src="/MasterCard.png" alt="MasterCard" className="h-8 w-auto" />
-                      <img src="/UnionPay.png" alt="UnionPay" className="h-8 w-auto" />
-                    </div>
-                    
-                    {/* Card Details Form */}
-                    <div className="space-y-2">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Cardholder Name</label>
-                        <input
-                          type="text"
-                          placeholder="John Doe"
-                          className="w-full p-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                        />
-                      </div>
-                      
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Card Number</label>
-                        <input
-                          type="text"
-                          placeholder="1234 1234 1234 1234"
-                          maxLength={19}
-                          className="w-full p-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                        />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">Expiration</label>
-                          <input
-                            type="text"
-                            placeholder="MM/YY"
-                            maxLength={5}
-                            className="w-full p-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">CVC</label>
-                          <input
-                            type="text"
-                            placeholder="123"
-                            maxLength={4}
-                            className="w-full p-1.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-transparent"
-                          />
-                        </div>
-                      </div>
-                    </div>
+                    className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors"
+                    aria-label="Back to cart"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <div className="text-right">
+                    <p className="text-xs uppercase tracking-widest text-white/70">Table {tableNumber}</p>
+                    <p className="text-lg font-semibold">Crusteez Checkout</p>
                   </div>
                 </div>
-
-                {/* Payment Button */}
-                <button
-                  onClick={() => {
-                    console.log('Processing payment for:', getTotalWithTip());
-                    clearCart();
-                    if (isCollaborativeSession) {
-                      endCollaborativeSession();
-                    }
-                    setShowPaymentMethod(false);
-                    setShowCart(false);
-                  }}
-                  className="w-full bg-white text-black border-2 border-black py-4 rounded-lg font-semibold text-lg hover:bg-gray-50 transition-colors flex items-center justify-center space-x-2"
-                >
-                  <span>PAY Rs.{getTotalWithTip().toFixed(2)}/-</span>
-                </button>
-                
-                {/* Security Message */}
-                <div className="flex items-center justify-center space-x-2 text-sm text-gray-600">
-                  <div className="w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
-                    <span className="text-white text-xs">✓</span>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-sm text-white/70">Total due</p>
+                    <p className="text-4xl font-bold">Rs.{getGrandTotal().toFixed(2)}/-</p>
                   </div>
-                  <span>100% secure payments powered by TableTap</span>
+                  <div className="text-right text-sm text-white/80">
+                    <p>{getCartItemCount()} items</p>
+                    <p>Includes GST, service fee & tip</p>
+                  </div>
                 </div>
               </div>
-            </motion.div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 bg-gray-50">
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="text-sm font-semibold text-gray-500 mb-3">Order summary</h3>
+                <div className="space-y-3">
+                  {Object.values(cart).map((item) => (
+                    <div
+                      key={`${item.name}-${item.addedBy}`}
+                      className="flex items-center justify-between text-sm text-gray-700 border-b pb-2 last:border-b-0"
+                    >
+                      <div>
+                        <p className="font-semibold text-gray-900">{item.name}</p>
+                        <p className="text-xs text-gray-500">
+                          Qty {item.quantity} {"\u00B7"} Rs.{item.price}/- each
+                        </p>
+                      </div>
+                      <span className="font-semibold text-gray-900">
+                        Rs.{(item.price * item.quantity).toFixed(2)}/-
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-2 text-sm text-gray-600 mt-4">
+                  <div className="flex justify-between">
+                    <span>Items</span>
+                    <span className="font-semibold text-gray-900">Rs.{getCartTotal()}/-</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Service fee (1%)</span>
+                    <span className="font-semibold text-gray-900">Rs.{getServiceFee()}/-</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>GST (5%)</span>
+                    <span className="font-semibold text-gray-900">Rs.{getGstAmount()}/-</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Tip ({selectedTip}%)</span>
+                    <span className="font-semibold text-gray-900">Rs.{getTipAmount()}/-</span>
+                  </div>
+                  <div className="flex justify-between border-t pt-2 text-base font-bold">
+                    <span>Total</span>
+                    <span>Rs.{getGrandTotal()}/-</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl p-4 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-gray-900">Choose payment method</h3>
+                  <span className="text-xs uppercase tracking-wide text-gray-400">secure</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { id: 'easypaisa', label: 'Easypaisa', logo: '/Easypaisa.png' },
+                    { id: 'jazzcash', label: 'JazzCash', logo: '/JazzCash.png' },
+                  ].map((wallet) => (
+                    <button
+                      key={wallet.id}
+                      onClick={() =>
+                        setSelectedPaymentMethod(
+                          selectedPaymentMethod === wallet.id ? null : (wallet.id as 'easypaisa' | 'jazzcash')
+                        )
+                      }
+                      className={`p-4 border rounded-xl flex items-center justify-center gap-2 text-sm font-semibold transition-colors ${
+                        selectedPaymentMethod === wallet.id
+                          ? 'border-black bg-black text-white'
+                          : 'border-gray-200 bg-gray-50 text-gray-700 hover:border-gray-400'
+                      }`}
+                    >
+                      <img src={wallet.logo} alt={wallet.label} className="h-6 w-auto" />
+                    </button>
+                  ))}
+                </div>
+                <div className="flex justify-center gap-3">
+                  <img src="/Visa.png" alt="Visa" className="h-8" />
+                  <img src="/MasterCard.png" alt="MasterCard" className="h-8" />
+                  <img src="/UnionPay.png" alt="UnionPay" className="h-8" />
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="col-span-2">
+                    <label className="text-gray-500">Cardholder name</label>
+                    <input
+                      type="text"
+                      value={cardholderName}
+                      onChange={(e) => {
+                        setCardholderName(e.target.value);
+                        setErrors((prev) => ({ ...prev, cardholderName: validateCardholderName(e.target.value) }));
+                      }}
+                      className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-black focus:border-transparent"
+                      placeholder="ALEX CRUSTEEZ"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-gray-500">Card number</label>
+                    <input
+                      type="text"
+                      value={cardNumber}
+                      onChange={(e) => {
+                        const formatted = formatCardNumber(e.target.value);
+                        setCardNumber(formatted);
+                        setErrors((prev) => ({ ...prev, cardNumber: validateCardNumber(formatted) }));
+                      }}
+                      className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-black focus:border-transparent"
+                      placeholder="1234 5678 9012 3456"
+                      maxLength={19}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-500">Expiry</label>
+                    <input
+                      type="text"
+                      value={expiration}
+                      onChange={(e) => {
+                        const formatted = formatExpiration(e.target.value);
+                        setExpiration(formatted);
+                        setErrors((prev) => ({ ...prev, expiration: validateExpiration(formatted) }));
+                      }}
+                      className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-black focus:border-transparent"
+                      placeholder="MM/YY"
+                      maxLength={5}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-500">CVC</label>
+                    <input
+                      type="text"
+                      value={cvc}
+                      onChange={(e) => {
+                        setCvc(e.target.value);
+                        setErrors((prev) => ({ ...prev, cvc: validateCvc(e.target.value) }));
+                      }}
+                      className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-black focus:border-transparent"
+                      placeholder="123"
+                      maxLength={4}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t bg-white">
+              <button
+                onClick={() => {
+                  clearCart();
+                  if (isCollaborativeSession) {
+                    endCollaborativeSession();
+                  }
+                  setShowPaymentMethod(false);
+                }}
+                className="w-full bg-black text-white py-4 rounded-xl font-semibold text-lg hover:bg-gray-900 transition-colors"
+              >
+                Pay Rs.{getGrandTotal().toFixed(2)}/-
+              </button>
+              <p className="text-center text-xs text-gray-500 mt-3">
+                100% secure payments powered by TableTap
+              </p>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -3355,3 +3977,35 @@ export default function Menu() {
     </motion.div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
