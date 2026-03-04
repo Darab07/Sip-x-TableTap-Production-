@@ -1,40 +1,38 @@
 import { motion, AnimatePresence } from "framer-motion";
 import React, { useState, useRef, useEffect } from "react";
 import {
+  Check,
+  BellRing,
   ChevronLeft,
   ChevronDown,
+  ClipboardList,
+  LogOut,
   Plus,
   Minus,
   X,
   ShoppingCart,
-  Users,
-  User,
   Clock,
-  Repeat,
-  Wallet,
-  Pencil,
-  Link2,
   MapPin,
   Star,
-  Menu as MenuIcon,
-  MoreHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getOrCreateUserID } from "@/lib/userID";
 
 const userId = getOrCreateUserID();
 
-const tabs = ["Deals", "Combos", "Donuts", "Sandwiches", "Salads", "Drinks"];
+const tabs = ["Breakfast", "Salads", "Sandwiches", "Coffee", "Slow Bar", "Not Coffee", "Matcha"];
 
 const RESTAURANT = {
-  name: "Crusteez",
-  address: "DHA Phase 2, Islamabad",
+  name: "SIP",
+  address: "F-8/3, Islamabad",
   rating: 4.8,
   reviews: 2729,
   servingTime: "15 - 20 min",
   averageLabel: "Average serving time",
   hours: "8 AM - 1 AM",
 };
+
+const BRAND_PRIMARY = "#91bda6";
 
 type CartItem = {
   name: string;
@@ -43,6 +41,40 @@ type CartItem = {
   image?: string;
   details?: string;
   addedBy: string;
+};
+
+type StoredOrder = {
+  orderNumber: string;
+  total: number;
+  subtotal: number;
+  tipAmount: number;
+  serviceFee: number;
+  gstAmount: number;
+  tableLabel: string;
+  notes: string;
+  items: Array<{
+    name: string;
+    price: number;
+    quantity: number;
+    image?: string;
+    details?: string;
+  }>;
+};
+
+type MenuItemAddOn = {
+  label: string;
+  price: number;
+};
+
+type MenuItemData = {
+  name: string;
+  image?: string;
+  description?: string;
+  price?: number;
+  eggOptions?: string[];
+  temperatureOptions?: string[];
+  temperaturePrices?: Record<string, number>;
+  addOnOptions?: MenuItemAddOn[];
 };
 
 const PRICE_MAP: Record<string, number> = {
@@ -72,9 +104,12 @@ const PRICE_MAP: Record<string, number> = {
   "pistachio delight": 300,
   "rabri": 300,
   "red velvet": 300,
-  "chicken malai boti": 450,
-  "club sandwich": 450,
-  "cubano": 450,
+  "grilled chicken pesto": 1795,
+  "mexi beef focaccia": 1995,
+  "sun kissed chicken": 1895,
+  "classic club": 1545,
+  "focaccia fillet": 1595,
+  "beef melt": 1895,
   "mediteranian salad": 350,
   "asian satay salad": 350,
   "peach iced tea": 180,
@@ -88,11 +123,322 @@ const PRICE_MAP: Record<string, number> = {
 };
 
 const SUGGESTED_ITEMS = [
-  { name: "Peach Iced Tea", price: 180, image: "/Drinks/Drink.png" },
-  { name: "Cold Chocolate Milk", price: 200, image: "/Drinks/Drink.png" },
-  { name: "Plain Glaze", price: 150, image: "/Classic/Plain Glaze.png" },
-  { name: "Nutella Bon", price: 240, image: "/Delights/Nutella Bon.png" },
+  { name: "Turkish Eggs", price: 1395, image: "/Breakfast/Turkish Eggs.jpg" },
+  { name: "Golden Crunch", price: 1295, image: "/Salads/Mediteranian Salad.png" },
+  { name: "Classic Club", price: 1545, image: "/Sandwiches/Club Sandwich.png" },
+  { name: "Cold Coffee", price: 220, image: "/Drinks/Drink.png" },
 ];
+
+const BREAKFAST_ITEMS: MenuItemData[] = [
+  {
+    name: "Turkish Eggs",
+    image: "/Breakfast/Turkish Eggs.jpg",
+    description: "Creamy garlic yogurt topped with soft poached eggs, finished with spiced chili butter, fresh herbs, and served alongside warm, crusty sourdough.",
+    price: 1395,
+    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
+  },
+  {
+    name: "Sunny Hummus Bowl",
+    image: "/Breakfast/Hummus Bowl.avif",
+    description: "Creamy hummus topped with roasted cherry tomatoes, perfectly cooked eggs, and a drizzle of signature cream sauce.",
+    price: 1695,
+    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
+  },
+  {
+    name: "Avocado Toast",
+    image: "/Breakfast/Avocado Toast.jpg",
+    description: "Creamy smashed avocado layered on warm, toasted ciabatta, topped with eggs, finished with olive oil, lemon, and a sprinkle of chili flakes.",
+    price: 1595,
+    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
+  },
+  {
+    name: "French Toast",
+    image: "/Breakfast/French Toast.jpg",
+    description: "Fluffy brioche slices soaked in rich custard, golden fried, and served with maple syrup, Nutella, or Lotus Biscoff.",
+    price: 1295,
+  },
+  {
+    name: "Steak & Eggs",
+    image: "/Breakfast/Steak and Eggs.avif",
+    description: "Seared beef or tender chicken paired with eggs your way and bread bites drenched in our signature cream sauce.",
+    price: 2395,
+    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
+  },
+];
+
+const SALAD_ADD_ONS: MenuItemAddOn[] = [
+  { label: "Fries", price: 695 },
+  { label: "Cheese", price: 75 },
+];
+
+const DRINK_ADD_ONS: MenuItemAddOn[] = [
+  { label: "Upsize", price: 275 },
+  { label: "Extra Shot/ Decaf", price: 245 },
+  { label: "Extra Flavour", price: 195 },
+  { label: "Extra Matcha", price: 145 },
+  { label: "Lactose Free", price: 145 },
+];
+
+const SALAD_ITEMS: MenuItemData[] = [
+  {
+    name: "Golden Crunch",
+    image: "/Salads/Mediteranian Salad.png",
+    description: "A hearty blend of crisp greens and golden, crunchy bites, finished with a savory touch of parmesan for perfect balance and flavor.",
+    price: 1295,
+    addOnOptions: SALAD_ADD_ONS,
+  },
+  {
+    name: "Ceaser salad",
+    image: "/Salads/Asian Satay Salad.png",
+    description: "A fresh, crisp take on the classic Caesar with tender chicken, vibrant greens, a rich parmesan finish, and our signature creamy dressing.",
+    price: 1695,
+    addOnOptions: SALAD_ADD_ONS,
+  },
+];
+
+const SANDWICH_ITEMS: MenuItemData[] = [
+  {
+    name: "Grilled Chicken Pesto",
+    image: "/Sandwiches/Chicken Malai Boti.png",
+    description: "Grilled chicken with house-made pesto and melted cheese on sourdough. Served with crisp green salad and golden potato wedges.",
+    price: 1795,
+  },
+  {
+    name: "Mexi Beef Focaccia",
+    image: "/Sandwiches/Cubano.png",
+    description: "Flavor-packed beef with Mexican spices in warm focaccia. Served with golden fries and crisp green salad.",
+    price: 1995,
+  },
+  {
+    name: "Sun Kissed Chicken",
+    image: "/Sandwiches/Chicken Malai Boti.png",
+    description: "Tender grilled chicken with creamy avocado and tangy sun-dried tomatoes on fresh sourdough. Served with crisp green salad and golden potato wedges.",
+    price: 1895,
+  },
+  {
+    name: "Classic Club",
+    image: "/Sandwiches/Club Sandwich.png",
+    description: "Triple-layer delight with chicken, egg, cheese and crisp veggies. Served with fries and creamy coleslaw.",
+    price: 1545,
+  },
+  {
+    name: "Focaccia Fillet",
+    image: "/Sandwiches/Cubano.png",
+    description: "Crispy fried chicken in warm focaccia with fresh greens and signature sauce. Served with fries and crisp green salad.",
+    price: 1595,
+  },
+  {
+    name: "Beef Melt",
+    image: "/Sandwiches/Club Sandwich.png",
+    description: "Succulent beef, melted cheese, and a touch of seasoning on rustic sourdough bread. Served with potato wedges and crunchy green salad.",
+    price: 1895,
+  },
+];
+
+const COFFEE_ITEMS: MenuItemData[] = [
+  {
+    name: "Espresso",
+    image: "/Drinks/Drink.png",
+    description: "Rich espresso shot served hot.",
+    price: 200,
+  },
+  {
+    name: "Cappuccino",
+    image: "/Drinks/Drink.png",
+    description: "Classic cappuccino served hot with a velvety finish.",
+    price: 220,
+  },
+  {
+    name: "Macchiato",
+    image: "/Drinks/Drink.png",
+    description: "Bold macchiato served hot.",
+    price: 200,
+  },
+  {
+    name: "Cortado",
+    image: "/Drinks/Drink.png",
+    description: "Balanced cortado served hot.",
+    price: 220,
+  },
+  {
+    name: "Flat White",
+    image: "/Drinks/Drink.png",
+    description: "Smooth flat white served hot.",
+    price: 220,
+  },
+  {
+    name: "Latte",
+    image: "/Drinks/Drink.png",
+    description: "Creamy latte with your choice of hot or iced.",
+    price: 240,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Spanish Latte",
+    image: "/Drinks/Drink.png",
+    description: "Sweet Spanish latte with your choice of hot or iced.",
+    price: 260,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "French Vanilla Gingerbread",
+    image: "/Drinks/Drink.png",
+    description: "French vanilla gingerbread coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Caramel Cinnamon",
+    image: "/Drinks/Drink.png",
+    description: "Caramel cinnamon coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Hazelnut",
+    image: "/Drinks/Drink.png",
+    description: "Hazelnut coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Butter Scotch",
+    image: "/Drinks/Drink.png",
+    description: "Butterscotch coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Tiramisu",
+    image: "/Drinks/Drink.png",
+    description: "Tiramisu coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Coconut",
+    image: "/Drinks/Drink.png",
+    description: "Coconut coffee with your choice of hot or iced.",
+    price: 280,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Mocha",
+    image: "/Drinks/Drink.png",
+    description: "Chocolate mocha with your choice of hot or iced.",
+    price: 260,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
+
+const SLOW_BAR_ITEMS: MenuItemData[] = [
+  {
+    name: "Tier 1",
+    image: "/Drinks/Drink.png",
+    description: "Ask the barista for the current slow bar selection.",
+  },
+  {
+    name: "Tier 2",
+    image: "/Drinks/Drink.png",
+    description: "Available hot or cold.",
+    temperatureOptions: ["Hot", "Cold"],
+    temperaturePrices: {
+      Hot: 1395,
+      Cold: 1395,
+    },
+  },
+  {
+    name: "Tier 3",
+    image: "/Drinks/Drink.png",
+    description: "Available hot or cold.",
+    temperatureOptions: ["Hot", "Cold"],
+    temperaturePrices: {
+      Hot: 975,
+      Cold: 975,
+    },
+  },
+].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
+
+const NOT_COFFEE_ITEMS: MenuItemData[] = [
+  {
+    name: "Hot/Iced Chocolate",
+    image: "/Drinks/Drink.png",
+    description: "Hot or iced chocolate.",
+    price: 795,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Sip Signature Chocolate",
+    image: "/Drinks/Drink.png",
+    description: "Sip signature chocolate, available hot or iced.",
+    price: 1195,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Apple Mojito",
+    image: "/Drinks/Drink.png",
+    description: "Classic apple mojito.",
+    price: 645,
+  },
+  {
+    name: "Raspberry Mojito",
+    image: "/Drinks/Drink.png",
+    description: "Raspberry mojito.",
+    price: 645,
+  },
+  {
+    name: "Pina Coco and Green Apple Mojito",
+    image: "/Drinks/Drink.png",
+    description: "Pina coco and green apple mojito.",
+    price: 645,
+  },
+  {
+    name: "Passion Fruit Mojito",
+    image: "/Drinks/Drink.png",
+    description: "Passion fruit mojito.",
+    price: 645,
+  },
+  {
+    name: "Lemon Iced Tea",
+    image: "/Drinks/Drink.png",
+    description: "Lemon iced tea.",
+    price: 625,
+  },
+  {
+    name: "Peach Iced Tea",
+    image: "/Drinks/Drink.png",
+    description: "Peach iced tea.",
+    price: 625,
+  },
+].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
+
+const MATCHA_ITEMS: MenuItemData[] = [
+  {
+    name: "Matcha",
+    image: "/Drinks/Drink.png",
+    description: "Classic matcha, available hot or iced.",
+    price: 795,
+    temperatureOptions: ["Hot", "Iced"],
+  },
+  {
+    name: "Spanish Matcha",
+    image: "/Drinks/Drink.png",
+    description: "Spanish-style matcha.",
+    price: 895,
+  },
+  {
+    name: "Stawberry Matcha",
+    image: "/Drinks/Drink.png",
+    description: "Strawberry matcha.",
+    price: 1295,
+  },
+  {
+    name: "Coconut Matcha",
+    image: "/Drinks/Drink.png",
+    description: "Coconut matcha.",
+    price: 1395,
+  },
+].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
 
 // Smart Counter Component
 function SmartCounter({ 
@@ -304,7 +650,7 @@ const tableNumber =
   tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || "1";
 const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
   
-  const [activeTab, setActiveTab] = useState("Deals");
+  const [activeTab, setActiveTab] = useState("Breakfast");
   const [showDonutModal, setShowDonutModal] = useState(false);
   const [currentDeal, setCurrentDeal] = useState<{
     type: string;
@@ -314,12 +660,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   } | null>(null);
   
   // Refs for scrolling to sections
-  const recommendedRef = useRef<HTMLDivElement>(null);
-  const combosRef = useRef<HTMLDivElement>(null);
-  const donutsRef = useRef<HTMLDivElement>(null);
+  const breakfastRef = useRef<HTMLDivElement>(null);
   const sandwichesRef = useRef<HTMLDivElement>(null);
   const saladsRef = useRef<HTMLDivElement>(null);
-  const drinksRef = useRef<HTMLDivElement>(null);
+  const coffeeRef = useRef<HTMLDivElement>(null);
+  const slowBarRef = useRef<HTMLDivElement>(null);
+  const notCoffeeRef = useRef<HTMLDivElement>(null);
+  const matchaRef = useRef<HTMLDivElement>(null);
 
   // Donut data for the modal
   const donutOptions = [
@@ -370,31 +717,22 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [isDragging, setIsDragging] = useState(false);
 
   // Scroll-based active tab detection
-  const [scrollActiveTab, setScrollActiveTab] = useState("Deals");
+  const [scrollActiveTab, setScrollActiveTab] = useState("Breakfast");
   const [showStickyHeader, setShowStickyHeader] = useState(false);
   const [serviceType, setServiceType] = useState<"table" | "takeaway">("table");
-  const [selectedItem, setSelectedItem] = useState<{
-    name: string;
-    description: string;
-    price: number;
-    image?: string;
-  } | null>(null);
+  const [selectedItem, setSelectedItem] = useState<(MenuItemData & { description: string; price: number }) | null>(null);
+  const [selectedEggType, setSelectedEggType] = useState<string | null>(null);
+  const [selectedTemperature, setSelectedTemperature] = useState<string | null>(null);
+  const [selectedAddOns, setSelectedAddOns] = useState<string[]>([]);
+  const [selectedSuggestedItems, setSelectedSuggestedItems] = useState<string[]>([]);
   const [itemQuantity, setItemQuantity] = useState(1);
   const [showItemModal, setShowItemModal] = useState(false);
-  const [showGroupOrder, setShowGroupOrder] = useState(false);
-  const [showWhoPays, setShowWhoPays] = useState(false);
-  const [whoPaysSelection, setWhoPaysSelection] = useState<"all" | "self" | "custom">("all");
-  const [customPayAmount, setCustomPayAmount] = useState("");
-  const [spendingLimit, setSpendingLimit] = useState("");
-  const [repeatSelection, setRepeatSelection] = useState<"none" | "daily" | "weekly" | "custom">("none");
-  const [whoPaysError, setWhoPaysError] = useState<string>("");
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showJoinPage, setShowJoinPage] = useState(false);
-  const [hasViewedGroupOrder, setHasViewedGroupOrder] = useState(false);
-  const [showGroupSummary, setShowGroupSummary] = useState(false);
   const [selectedTip, setSelectedTip] = useState(() => {
     const savedTip = localStorage.getItem(`selectedTip_${userId}`);
     return savedTip ? parseInt(savedTip) : 5;
+  });
+  const [orderNotes, setOrderNotes] = useState(() => {
+    return localStorage.getItem(`orderNotes_${userId}`) || "";
   });
   const [showSplitOptions, setShowSplitOptions] = useState(false);
   const [showPaymentMethod, setShowPaymentMethod] = useState(false);
@@ -420,6 +758,42 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [collaborativeUserId, setCollaborativeUserId] = useState<string | null>(null);
   const [isSessionLocked, setIsSessionLocked] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastOrder, setLastOrder] = useState<StoredOrder | null>(() => {
+    const savedOrder = localStorage.getItem(`lastOrder_${userId}`);
+    if (!savedOrder) return null;
+    try {
+      return JSON.parse(savedOrder);
+    } catch {
+      return null;
+    }
+  });
+  const [showOrderTracker, setShowOrderTracker] = useState(() => {
+    return Boolean(localStorage.getItem(`lastOrder_${userId}`));
+  });
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showPastOrdersModal, setShowPastOrdersModal] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+
+  const handleCallWaiter = () => {
+    setNotification({
+      type: "success",
+      message: "A waiter has been notified.",
+    });
+    setTimeout(() => setNotification(null), 3000);
+  };
+
+  const dismissActiveOrder = () => {
+    setShowOrderTracker(false);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(getCartKey());
+    localStorage.removeItem(getTipKey());
+    localStorage.removeItem(getOrderNotesKey());
+    localStorage.removeItem(getStoredOrderKey());
+    sessionStorage.removeItem("tempUserId");
+    window.location.href = "/menu";
+  };
 
   const validateCardholderName = (name: string) => {
     if (!name.trim()) return "Cardholder name is required";
@@ -494,10 +868,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   // Get user-specific keys
   const getCartKey = () => `cart_${userId}`;
   const getTipKey = () => `selectedTip_${userId}`;
+  const getOrderNotesKey = () => `orderNotes_${userId}`;
+  const getStoredOrderKey = () => `lastOrder_${userId}`;
+  const getCartItemKey = (itemName: string) => `${itemName}_${userId}`;
   
   // Wrapper function to convert item name to proper item key for removal
   const removeItemByName = (itemName: string) => {
-    const itemKey = `${itemName}_${userId}`;
+    const itemKey = getCartItemKey(itemName);
     removeItemFromCart(itemKey);
   };
   const [showCart, setShowCart] = useState(false);
@@ -864,12 +1241,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     
     // Scroll to the corresponding section
     const refs = {
-      "Deals": recommendedRef,
-      "Combos": combosRef,
-      "Donuts": donutsRef,
-      "Sandwiches": sandwichesRef,
+      "Breakfast": breakfastRef,
       "Salads": saladsRef,
-      "Drinks": drinksRef
+      "Sandwiches": sandwichesRef,
+      "Coffee": coffeeRef,
+      "Slow Bar": slowBarRef,
+      "Not Coffee": notCoffeeRef,
+      "Matcha": matchaRef,
     };
     
     const targetRef = refs[tab as keyof typeof refs];
@@ -992,6 +1370,124 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return currentSelection.freeDonutsSelected;
   };
 
+  const getSelectedAddOnTotal = (item: MenuItemData, addOns: string[] = []) => {
+    if (!item.addOnOptions?.length) return 0;
+    return item.addOnOptions
+      .filter((option) => addOns.includes(option.label))
+      .reduce((total, option) => total + option.price, 0);
+  };
+
+  const getBaseItemPrice = (item: MenuItemData, temperature?: string | null) => {
+    if (temperature && typeof item.temperaturePrices?.[temperature] === "number") {
+      return item.temperaturePrices[temperature];
+    }
+
+    if (item.temperaturePrices) {
+      if (item.temperatureOptions?.length) {
+        const firstAvailablePrice = item.temperatureOptions
+          .map((option) => item.temperaturePrices?.[option])
+          .find((price): price is number => typeof price === "number");
+        if (typeof firstAvailablePrice === "number") {
+          return firstAvailablePrice;
+        }
+      }
+
+      const firstDefinedPrice = Object.values(item.temperaturePrices).find(
+        (price): price is number => typeof price === "number",
+      );
+      if (typeof firstDefinedPrice === "number") {
+        return firstDefinedPrice;
+      }
+    }
+
+    return resolvePrice(item.name, item.price);
+  };
+
+  const isOrderableItem = (item: MenuItemData) => getBaseItemPrice(item, item.temperatureOptions?.[0] ?? null) > 0;
+
+  const getItemPriceLabel = (item: MenuItemData, temperature?: string | null) => {
+    if (temperature) {
+      const selectedPrice = getBaseItemPrice(item, temperature);
+      return selectedPrice > 0 ? `Rs.${selectedPrice.toLocaleString()}/-` : null;
+    }
+
+    if (item.temperaturePrices && item.temperatureOptions?.length) {
+      const priceEntries = item.temperatureOptions
+        .map((option) => ({ option, price: item.temperaturePrices?.[option] }))
+        .filter((entry): entry is { option: string; price: number } => typeof entry.price === "number");
+
+      if (!priceEntries.length) {
+        return null;
+      }
+
+      const uniquePrices = [...new Set(priceEntries.map((entry) => entry.price))];
+      if (uniquePrices.length === 1) {
+        return `Rs.${uniquePrices[0].toLocaleString()}/-`;
+      }
+
+      return priceEntries
+        .map((entry) => `${entry.option} Rs.${entry.price.toLocaleString()}/-`)
+        .join(" • ");
+    }
+
+    const basePrice = getBaseItemPrice(item, null);
+    return basePrice > 0 ? `Rs.${basePrice.toLocaleString()}/-` : null;
+  };
+
+  const getSuggestedSelectionTotal = () =>
+    selectedSuggestedItems.reduce((total, itemName) => {
+      const suggestion = SUGGESTED_ITEMS.find((item) => item.name === itemName);
+      if (!suggestion) return total;
+      return total + resolvePrice(suggestion.name, suggestion.price);
+    }, 0);
+
+  const getSelectedItemPrice = (
+    item: MenuItemData,
+    eggType?: string | null,
+    temperature?: string | null,
+    addOns: string[] = [],
+  ) => {
+    return getBaseItemPrice(item, temperature) + getSelectedAddOnTotal(item, addOns);
+  };
+
+  const getSelectedCartName = (
+    item: MenuItemData,
+    eggType?: string | null,
+    temperature?: string | null,
+    addOns: string[] = [],
+  ) => {
+    const segments = [item.name];
+    if (item.eggOptions?.length && eggType) {
+      segments[0] = `${segments[0]} (${eggType})`;
+    }
+    if (item.temperatureOptions?.length && temperature) {
+      segments[0] = `${segments[0]} (${temperature})`;
+    }
+    if (addOns.length) {
+      segments[0] = `${segments[0]} + ${addOns.join(" + ")}`;
+    }
+    return segments[0];
+  };
+
+  const getSelectedItemDetails = (
+    item: MenuItemData,
+    eggType?: string | null,
+    temperature?: string | null,
+    addOns: string[] = [],
+  ) => {
+    const details: string[] = [];
+    if (item.eggOptions?.length && eggType) {
+      details.push(`Eggs: ${eggType}`);
+    }
+    if (item.temperatureOptions?.length && temperature) {
+      details.push(`Temperature: ${temperature}`);
+    }
+    if (addOns.length) {
+      details.push(`Extras: ${addOns.join(", ")}`);
+    }
+    return details.length ? `${item.description || ""} ${details.join(" | ")}`.trim() : item.description;
+  };
+
   const setCurrentFreeDonuts = (freeDonuts: string[]) => {
     const dealKey = getCurrentDealKey();
     if (!dealKey) return;
@@ -1016,7 +1512,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
     setCart(prev => {
       // Create unique key for this user's item
-      const uniqueKey = `${itemName}_${userId}`;
+      const uniqueKey = getCartItemKey(itemName);
       
       const newCart = {
         ...prev,
@@ -1215,12 +1711,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           setShowStickyHeader(window.scrollY > 200);
           
           const sections = [
-            { name: "Deals", ref: recommendedRef },
-            { name: "Combos", ref: combosRef },
-            { name: "Donuts", ref: donutsRef },
-            { name: "Sandwiches", ref: sandwichesRef },
+            { name: "Breakfast", ref: breakfastRef },
             { name: "Salads", ref: saladsRef },
-            { name: "Drinks", ref: drinksRef }
+            { name: "Sandwiches", ref: sandwichesRef },
+            { name: "Coffee", ref: coffeeRef },
+            { name: "Slow Bar", ref: slowBarRef },
+            { name: "Not Coffee", ref: notCoffeeRef },
+            { name: "Matcha", ref: matchaRef },
           ];
 
           for (let i = sections.length - 1; i >= 0; i--) {
@@ -1267,16 +1764,26 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const image = (cardEl.querySelector('img') as HTMLImageElement | null)?.getAttribute('src') || "";
     const currentQty = getCartQuantityByName(name);
     setSelectedItem({ name, description, price, image });
+    setSelectedEggType(null);
+    setSelectedTemperature(null);
+    setSelectedAddOns([]);
     setItemQuantity(currentQty > 0 ? currentQty : 1);
     setShowItemModal(true);
   };
 
-  const openItemDetailFromData = (item: { name: string; description?: string; price?: number; image?: string; }) => {
-    const price = resolvePrice(item.name, item.price);
+  const openItemDetailFromData = (item: MenuItemData) => {
+    if (!isOrderableItem(item)) return;
+    const defaultTemperature = item.temperatureOptions?.[0] ?? null;
+    const price = getBaseItemPrice(item, defaultTemperature);
     const image = item.image || "";
     const description = item.description || "";
-    const currentQty = getCartQuantityByName(item.name);
-    setSelectedItem({ name: item.name, description, price, image });
+    const defaultEggType = item.eggOptions?.[0] ?? null;
+    const currentQty = getCartQuantityByName(getSelectedCartName(item, defaultEggType, defaultTemperature, []));
+    setSelectedItem({ ...item, name: item.name, description, price, image });
+    setSelectedEggType(defaultEggType);
+    setSelectedTemperature(defaultTemperature);
+    setSelectedAddOns([]);
+    setSelectedSuggestedItems([]);
     setItemQuantity(currentQty > 0 ? currentQty : 1);
     setShowItemModal(true);
   };
@@ -1284,27 +1791,82 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const handleCloseItemModal = () => {
     setShowItemModal(false);
     setSelectedItem(null);
+    setSelectedEggType(null);
+    setSelectedTemperature(null);
+    setSelectedAddOns([]);
+    setSelectedSuggestedItems([]);
     setItemQuantity(1);
   };
 
   const handleAddSelectedItem = () => {
     if (!selectedItem) return;
-    const currentQty = getCartQuantityByName(selectedItem.name);
+    const cartName = getSelectedCartName(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
+    const itemPrice = getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
+    const itemDetails = getSelectedItemDetails(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
+    const currentQty = getCartQuantityByName(cartName);
     const diff = itemQuantity - currentQty;
     if (diff > 0) {
       for (let i = 0; i < diff; i++) {
-        addItemToCart(selectedItem.name, selectedItem.price, selectedItem.image, selectedItem.description);
+        addItemToCart(cartName, itemPrice, selectedItem.image, itemDetails);
       }
     } else if (diff < 0) {
       for (let i = 0; i < Math.abs(diff); i++) {
-        removeItemByName(selectedItem.name);
+        removeItemByName(cartName);
       }
     }
+
+    selectedSuggestedItems.forEach((itemName) => {
+      const suggestion = SUGGESTED_ITEMS.find((item) => item.name === itemName);
+      if (!suggestion) return;
+      addItemToCart(
+        suggestion.name,
+        resolvePrice(suggestion.name, suggestion.price),
+        suggestion.image,
+        "Frequently bought together",
+      );
+    });
+
     handleCloseItemModal();
   };
 
+  const handleAddSuggestedItem = (item: MenuItemData) => {
+    const price = getBaseItemPrice(item, item.temperatureOptions?.[0] ?? null);
+    if (price <= 0) return;
+    setSelectedSuggestedItems((prev) =>
+      prev.includes(item.name)
+        ? prev.filter((name) => name !== item.name)
+        : [...prev, item.name],
+    );
+  };
+
   useEffect(() => {
-    if (showItemModal || showGroupOrder || showWhoPays || showInviteModal || showJoinPage || showGroupSummary || showCart) {
+    if (!selectedItem || !showItemModal) return;
+    const cartName = getSelectedCartName(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
+    const currentQty = getCartQuantityByName(cartName);
+    setItemQuantity(currentQty > 0 ? currentQty : 1);
+  }, [selectedItem, selectedEggType, selectedTemperature, selectedAddOns, showItemModal, cart]);
+
+  useEffect(() => {
+    localStorage.setItem(getTipKey(), selectedTip.toString());
+  }, [selectedTip]);
+
+  useEffect(() => {
+    localStorage.setItem(getOrderNotesKey(), orderNotes);
+  }, [orderNotes]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setShowAccountMenu(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    if (showItemModal || showCart) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = '';
@@ -1312,78 +1874,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return () => {
       document.body.style.overflow = '';
     };
-  }, [showItemModal, showGroupOrder, showWhoPays, showInviteModal, showJoinPage, showGroupSummary, showCart]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("group") === "true") {
-      setShowJoinPage(true);
-    }
-  }, []);
+  }, [showItemModal, showCart]);
 
   const getSuggestedItems = (currentName: string) => {
     const filtered = SUGGESTED_ITEMS.filter(item => item.name.toLowerCase() !== currentName.toLowerCase());
     return (filtered.length ? filtered : SUGGESTED_ITEMS).slice(0, 2);
   };
-
-  const renderGroupSummaryItems = () => {
-    return Object.entries(cart).map(([key, item]) => (
-      <div key={key} className="flex items-center justify-between py-3">
-        <div className="flex items-center gap-3">
-          {item.image && <img src={item.image} alt={item.name} className="w-12 h-12 rounded-lg object-cover" />}
-          <div>
-            <p className="text-base font-semibold text-gray-900 heading-font">{item.name}</p>
-            <p className="text-sm text-gray-600 subtext-font">Rs.{item.price}/-</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1">
-          <button onClick={() => removeItemFromCart(key)} className="p-1">
-            <Minus size={16} />
-          </button>
-          <span className="text-base font-semibold heading-font">{item.quantity}</span>
-          <button onClick={() => addItemToCart(item.name, item.price, item.image, item.details)} className="p-1">
-            <Plus size={16} />
-          </button>
-        </div>
-      </div>
-    ));
-  };
-
-  const copyToClipboard = async (text: string) => {
-    try {
-      const tempInput = document.createElement("textarea");
-      tempInput.value = text;
-      tempInput.setAttribute("readonly", "");
-      tempInput.style.position = "absolute";
-      tempInput.style.left = "-9999px";
-      document.body.appendChild(tempInput);
-      tempInput.select();
-      document.execCommand("copy");
-      document.body.removeChild(tempInput);
-      setNotification({ type: "success", message: "Link copied" });
-      setTimeout(() => setNotification(null), 2000);
-    } catch (e) {
-      setNotification({ type: "error", message: "Unable to copy link" });
-      setTimeout(() => setNotification(null), 2000);
-    }
-  };
-
-  const whoPaysOptions = [
-    {
-      key: "everyone",
-      title: "You pay for everyone",
-      description: "No spending limit",
-      icon: <Wallet size={18} />,
-      action: () => {}
-    },
-    {
-      key: "self",
-      title: "Everyone pays for themselves",
-      description: "Up to 18 people",
-      icon: <Users size={18} />,
-      action: () => {}
-    }
-  ];
 
   // Check for join requests and responses periodically
   useEffect(() => {
@@ -1682,6 +2178,65 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   }, [isCollaborativeSession, collaborativeUserId, cart]);
 
   const cartListScrollable = Object.keys(cart).length > 2;
+  const renderAccountMenu = (avatarSizeClass: string) => (
+    <div ref={accountMenuRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setShowAccountMenu((value) => !value)}
+        className="rounded-full transition-transform hover:scale-[1.02]"
+      >
+        <img
+          src="/Avatar.avif"
+          alt="User avatar"
+          className={`${avatarSizeClass} rounded-full object-cover border border-gray-200 shadow-sm`}
+        />
+      </button>
+
+      {showAccountMenu && (
+        <div className="absolute right-0 top-full z-50 mt-3 w-64 overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-xl">
+          <div className="border-b border-gray-100 px-4 py-4">
+            <p className="text-sm font-semibold text-gray-900 heading-font">Signed in</p>
+            <p className="mt-1 text-xs text-gray-500 subtext-font">User ID {userId}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setShowPastOrdersModal(true);
+              setShowAccountMenu(false);
+            }}
+            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+          >
+            <ClipboardList size={17} />
+            <span className="heading-font">View past order</span>
+          </button>
+
+          {lastOrder ? (
+            <button
+              type="button"
+              onClick={() => {
+                setShowOrderTracker(true);
+                setShowAccountMenu(false);
+              }}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+            >
+              <BellRing size={17} />
+              <span className="heading-font">Track current order</span>
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-red-600 transition-colors hover:bg-red-50"
+          >
+            <LogOut size={17} />
+            <span className="heading-font">Log out</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <motion.div
@@ -1691,6 +2246,16 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       transition={{ duration: 0.4 }}
       className="bg-[#faf9f6] pb-safe pb-2"
     >
+      <style>{`
+        .menu-image-surface {
+          background-color: ${BRAND_PRIMARY};
+        }
+
+        .item-image {
+          background-color: ${BRAND_PRIMARY};
+        }
+      `}</style>
+
       {/* Notification Banner */}
       {notification && (
         <div className="fixed top-4 left-4 z-50 animate-in slide-in-from-left duration-300">
@@ -1712,10 +2277,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       {/* Header */}
       <div
         className="bg-white px-4 py-0 flex items-center justify-between border-b border-b-gray-200"
-        style={{ minHeight: "2.25rem" }}
+        style={{ minHeight: "2rem" }}
       >
         <div className="flex items-center gap-3">
-          <MenuIcon className="text-gray-900" />
           <img
             src="/TableTap.png"
             alt="Table Tap"
@@ -1724,13 +2288,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           />
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="rounded-full px-4">
-            <User size={16} />
-            Log in
-          </Button>
-          <Button size="sm" className="rounded-full px-4">
-            Sign up
-          </Button>
+          {renderAccountMenu("h-11 w-11")}
         </div>
       </div>
 
@@ -1739,8 +2297,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         <div className="h-[160px] w-full">
           <img
             src="/HeroImage.jpg"
-            alt="Crusteez hero"
-            className="h-full w-full object-cover"
+            alt="SIP hero"
+            className="h-full w-full object-cover object-bottom"
           />
           <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/10 to-transparent" />
         </div>
@@ -1777,16 +2335,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       {/* Sticky header on scroll */}
       {showStickyHeader && (
         <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200 shadow-sm">
-          <div className="px-4 py-3 flex items-center justify-between">
+          <div className="px-4 py-2.5 flex items-center justify-between">
             <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="rounded-full px-4">
-                <User size={16} />
-                Log in
-              </Button>
-              <Button size="sm" className="rounded-full px-4">
-                Sign up
-              </Button>
+              {renderAccountMenu("h-10 w-10")}
             </div>
           </div>
           <div className="px-4 pb-3">
@@ -1819,9 +2371,72 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         </div>
       )}
 
+      {showOrderTracker && lastOrder && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 px-4 pb-[1.1rem] pt-3 backdrop-blur">
+          <div className="rounded-3xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
+            <div className="grid grid-cols-4 gap-2">
+              {[0, 1, 2, 3].map((step) => (
+                step === 0 ? (
+                  <div key={step} className="h-1.5 overflow-hidden rounded-full bg-gray-200">
+                    <motion.div
+                      className="h-full origin-left rounded-full bg-black"
+                      animate={{ scaleX: [0, 1, 1, 0] }}
+                      transition={{
+                        duration: 1.8,
+                        repeat: Infinity,
+                        ease: "linear",
+                        times: [0, 0.75, 0.9, 1],
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <div key={step} className="h-1.5 rounded-full bg-gray-200" />
+                )
+              ))}
+            </div>
+            <div className="mt-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-gray-900 heading-font">Your order is being prepared</p>
+                <p className="mt-1 text-xs text-gray-500 subtext-font">
+                  Order #{lastOrder.orderNumber} will be served to {lastOrder.tableLabel}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={dismissActiveOrder}
+                className="rounded-full border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition-colors hover:border-gray-300 hover:text-gray-900"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={handleCallWaiter}
+        className={`fixed right-4 z-40 flex items-center gap-2 rounded-full bg-black px-4 py-3 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-gray-900 heading-font ${
+          showOrderTracker && lastOrder && getCartItemCount() > 0
+            ? "bottom-40"
+            : showOrderTracker && lastOrder
+              ? "bottom-28"
+              : getCartItemCount() > 0
+                ? "bottom-24"
+                : "bottom-6"
+        }`}
+      >
+        <BellRing size={18} />
+        <span>Call waiter</span>
+      </button>
+
       {/* Sticky View Cart Bar */}
       {getCartItemCount() > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[1.1rem] pt-2 bg-white/95 backdrop-blur border-t border-gray-200">
+        <div
+          className={`fixed inset-x-0 z-30 px-4 pb-[1.1rem] pt-2 bg-white/95 backdrop-blur border-t border-gray-200 ${
+            showOrderTracker && lastOrder ? "bottom-24" : "bottom-0"
+          }`}
+        >
           <button
             onClick={() => setShowCart(true)}
             className="w-full flex items-center justify-between rounded-full bg-black text-white px-5 py-3 shadow-lg transition-colors hover:bg-gray-900 heading-font"
@@ -1841,7 +2456,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
             <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-white shadow-xl border border-gray-100 flex items-center justify-center">
               <img
                 src="/logo.png"
-                alt="Crusteez logo"
+                alt="SIP logo"
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover"
               />
             </div>
@@ -1890,22 +2505,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 Take-away
               </button>
             </div>
-            <div className="flex justify-start">
-              <button
-                className="px-4 py-1.5 rounded-full border border-gray-200 text-gray-900 flex items-center gap-2 heading-font bg-gray-100 text-sm font-semibold min-w-[180px] justify-center shadow-inner"
-                onClick={() => {
-                  setHasViewedGroupOrder(true);
-                  if (hasViewedGroupOrder) {
-                    setShowGroupSummary(true);
-                  } else {
-                    setShowGroupOrder(true);
-                  }
-                }}
-              >
-                {hasViewedGroupOrder ? <Users size={16} /> : <User size={16} />}
-                {hasViewedGroupOrder ? "View group order" : "Group order"}
-              </button>
-            </div>
           </div>
 
           <div className="mt-6 text-sm subtext-font text-gray-700">
@@ -1948,943 +2547,204 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
       {/* All Sections on One Page */}
       <div className="px-4 pb-6">
-        {/* Deals Section */}
-         <div ref={recommendedRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">DEALS.</h2>
-          <div className="flex space-x-4 overflow-x-auto">
-            {/* Card 1 */}
-            <div 
-              className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => {
-                setCurrentDeal({
-                  type: "deal",
-                  limit: 7,
-                  freeCount: 1,
-                  title: "BUY ANY 7 DONUTS AND GET 1 CLASSIC FREE"
-                });
-                setShowDonutModal(true);
-              }}
-            >
-                              <img
-                  src="/Deals/BuyAny7Get1Free.jpg"
-                  alt="Deal 1"
-                  className="w-full h-32 object-cover rounded-t-lg"
-                />
-              <div className="p-3">
-                <div className="font-bold text-xs mb-1">BUY ANY 7 DONUTS AND GET 1 CLASSIC FREE</div>
-                <div className="text-xs text-gray-500 mb-2">Pick any 7 and enjoy a classic donut on us - sweet, and simple!</div>
-                <div className="font-bold text-sm">From Rs.1,050/-</div>
-              </div>
-            </div>
-            {/* Card 2 */}
-            <div 
-              className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => {
-                setCurrentDeal({
-                  type: "deal",
-                  limit: 12,
-                  freeCount: 2,
-                  title: "BUY ANY 12 DONUTS AND GET 2 CLASSIC FREE"
-                });
-                setShowDonutModal(true);
-              }}
-            >
-              <img
-                src="/Deals/BuyAny12Get2Free.jpg"
-                alt="Deal 2"
-                className="w-full h-32 object-cover rounded-t-lg"
-              />
-              <div className="p-3">
-                <div className="font-bold text-xs mb-1">BUY ANY 12 DONUTS AND GET 2 CLASSIC FREE</div>
-                <div className="text-xs text-gray-500 mb-2">Grab any 12 donuts and we'll add 2 classic favorites for free!</div>
-                <div className="font-bold text-sm">From Rs.1,800/-</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-         {/* Combos Section */}
-         <div ref={combosRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">COMBOS.</h2>
+        {/* Breakfast Section */}
+         <div ref={breakfastRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">BREAKFAST AT SIP.</h2>
            <div className="flex space-x-4 overflow-x-auto">
-             {/* Combo Card 1 */}
-             <div 
-               className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-               onClick={() => {
-                 setCurrentDeal({
-                   type: "combo",
-                   limit: 4,
-                   freeCount: 0,
-                   title: "BOX OF 4"
-                 });
-                 setShowDonutModal(true);
-               }}
-             >
-               <img
-                 src="/Combos/Box4.jpg"
-                 alt="Box of 4"
-                 className="w-full h-32 object-cover rounded-t-lg"
-               />
-               <div className="p-3">
-                 <div className="font-bold text-xs mb-1">BOX OF 4</div>
-                 <div className="text-xs text-gray-500 mb-2">Pick any 4 donuts of your choice - perfect for sharing (or not).</div>
-                 <div className="font-bold text-sm">From Rs.600/-</div>
+             {BREAKFAST_ITEMS.map((item) => (
+               <div
+                 key={item.name}
+                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
+                 onClick={() => openItemDetailFromData(item)}
+               >
+                 <img
+                   src={item.image}
+                   alt={item.name}
+                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
+                 />
+                 <div className="p-3">
+                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                 </div>
                </div>
-             </div>
-             {/* Combo Card 2 */}
-             <div 
-               className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-               onClick={() => {
-                 setCurrentDeal({
-                   type: "combo",
-                   limit: 8,
-                   freeCount: 0,
-                   title: "BOX OF 8"
-                 });
-                 setShowDonutModal(true);
-               }}
-             >
-               <img
-                 src="/Combos/Box8.jpg"
-                 alt="Box of 8"
-                 className="w-full h-32 object-cover rounded-t-lg"
-               />
-               <div className="p-3">
-                 <div className="font-bold text-xs mb-1">BOX OF 8</div>
-                 <div className="text-xs text-gray-500 mb-2">Choose 8 of your favorites - more donuts, more happiness.</div>
-                 <div className="font-bold text-sm">From Rs.1,200/-</div>
-               </div>
-             </div>
-             {/* Combo Card 3 */}
-             <div 
-               className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-               onClick={() => {
-                 setCurrentDeal({
-                   type: "combo",
-                   limit: 12,
-                   freeCount: 0,
-                   title: "BOX OF 12"
-                 });
-                 setShowDonutModal(true);
-               }}
-             >
-               <img
-                 src="/Combos/Box12.jpg"
-                 alt="Box of 12"
-                 className="w-full h-32 object-cover rounded-t-lg"
-               />
-               <div className="p-3">
-                 <div className="font-bold text-xs mb-1">BOX OF 12</div>
-                 <div className="text-xs text-gray-500 mb-2">Go all in with a dozen - ideal for parties, gifts, or cravings.</div>
-                 <div className="font-bold text-sm">From Rs.1,800/-</div>
-               </div>
-             </div>
+             ))}
            </div>
          </div>
 
-          {/* Donuts Section */}
-         <div ref={donutsRef} className="py-12">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">DONUTS.</h2>
-           
-                       {/* Classic Donuts */}
-            <div className="mb-8">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">CLASSIC</h3>
-              <div className="space-y-3">
-                              {/* Classic Donut Card 1 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Classic/Plain Chocolate.png"
-                   alt="Plain Chocolate"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Plain Chocolate</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Rich, smooth chocolate glaze on a fluffy ring - a timeless classic for chocoholics.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
-                </div>
-               </div>
-
-                                                              {/* Classic Donut Card 2 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Classic/Plain Glaze.png"
-                    alt="Plain Glaze"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Plain Glaze</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Light, airy, and melt-in-your-mouth sweet. Simplicity never tasted this good.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
-                </div>
-                </div>
-
-                {/* Classic Donut Card 3 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Classic/Strawberry Sprinkle.png"
-                    alt="Strawberry Sprinkle"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Strawberry Sprinkle</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Sweet strawberry icing topped with rainbow sprinkles - fun, fruity, and festive in every bite!</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.150/-</div>
-                </div>
-                </div>
-             </div>
-           </div>
-
-                       {/* Delights Donuts */}
-            <div className="mb-8">
-              <h3 className="text-lg font-bold text-gray-800 mb-4">DELIGHTS</h3>
-              <div className="space-y-3">
-                                               {/* Delights Donut Card 1 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/After Eight.png"
-                    alt="After Eight"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">After Eight</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Minty chocolate glaze drizzled with a fresh green swirl - the perfect post-dinner indulgence.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                                {/* Delights Donut Card 2 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Coconut Truffle.png"
-                    alt="Coconut Truffle"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Coconut Truffle</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Coated in coconut glaze, topped with toasted flakes and a truffle center.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                                {/* Delights Donut Card 3 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Cookies and Cream.png"
-                    alt="Cookies and Cream"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cookies and Cream</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Loaded with crushed Oreos and finished with a white glaze - every bite is cookies and bliss.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                                {/* Delights Donut Card 4 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Ferrero Rocher.png"
-                    alt="Ferrero Rocher"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Ferrero Rocher</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">A luxurious blend of hazelnut and chocolate topped with crunchy bits.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                {/* Delights Donut Card 5 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Nutella Bon.png"
-                    alt="Nutella Bon"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Nutella Bon</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Luscious Nutella glaze with a chocolate swirl - rich, smooth, and utterly irresistible.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                {/* Delights Donut Card 6 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Oreo Chocolate.png"
-                    alt="Oreo Chocolate"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Oreo Chocolate</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Dusted in Oreo crumbs, striped with chocolate drizzle - a dark delight for cookie lovers.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-
-                {/* Delights Donut Card 7 */}
-                <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                  <img
-                    src="/Delights/Salted Caramel.png"
-                    alt="Salted Caramel"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Salted Caramel</div>
-                    <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Golden caramel glaze with a hint of sea salt - sticky, sweet, and dangerously good.</div>
-                    <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.240/-</div>
-                </div>
-                </div>
-             </div>
-           </div>
-
-           {/* Premium Donuts */}
-           <div className="mb-8">
-             <h3 className="text-lg font-bold text-gray-800 mb-4">PREMIUM</h3>
-             <div className="space-y-3">
-               {/* Premium Donut Card 1 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Bagelish.png"
-                   alt="Bagelish"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Bagelish</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Savory cream cheese donut topped with dill, zaatar, and white sesame seeds.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 2 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Bavarian Cream.png"
-                   alt="Bavarian Cream"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Bavarian Cream</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Vanilla-salt cream filled donut topped with rich chocolate, cream, and butter.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 3 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/benoffee.png"
-                   alt="Benoffee"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Benoffee</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Fluffy dulce de leche cream with banana caramel glaze and biscuit crumb topping.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 4 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Blueberry Cream Cheese.png"
-                   alt="Blueberry Cream Cheese"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Blueberry Cream Cheese</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with white chocolate and cheese, topped with tangy blueberry and candy crumbs.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 5 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Choco Fudge.png"
-                   alt="Choco Fudge"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Choco Fudge</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Creamy dark chocolate filled donut topped with milk, powder, and chocolate shavings.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 6 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Chocolate Malt.png"
-                   alt="Chocolate Malt"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Chocolate Malt</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Malt-filled donut with dark chocolate, cream, and biscuit crumb topping.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 7 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Hazelnutty.png"
-                   alt="Hazelnutty"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Hazelnutty</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with rich Nutella and topped with icing sugar for hazelnut chocolate bliss.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 8 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Jammie.png"
-                   alt="Jammie"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Jammie</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with cream diplomat and berry jam, topped with a dusting of icing sugar.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 9 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Jelly Donut.png"
-                   alt="Jelly Donut"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Jelly Donut</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Asoft, fluffy donut, filled with strawberry jelly and topped with icing sugar.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 10 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Kinder Bueno.png"
-                   alt="Kinder Bueno"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Kinder Bueno</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Long donut filled with hazelnut white chocolate cream, Bueno glaze, and chocolate drizzle.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 11 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Lemon Curd.png"
-                   alt="Lemon Curd"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Lemon Curd</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Tangy lemon cream filling topped with white chocolate and crunchy biscuit crumble.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 12 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Lotus.png"
-                   alt="Lotus"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Lotus</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with lotus spread, white chocolate, and cream, topped with crushed lotus and swirls.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 13 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Peanut Caramel.png"
-                   alt="Peanut Caramel"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Peanut Caramel</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Salted caramel glaze with caramelized peanut bits, topped with chocolate drizzle.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 14 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Pistachio Delight.png"
-                   alt="Pistachio Delight"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Pistachio Delight</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Brioche donut with whipped pistachio cream, chocolate ganache, pistachio glaze, and piping.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-
-               {/* Premium Donut Card 15 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-                 <img
-                   src="/Premium/Rabri.png"
-                   alt="Rabri"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Rabri</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Filled with creamy rabri, topped with cardamom glaze, nuts, and rose petals.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div> 
-
-               {/* Premium Donut Card 16 */}
-               <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>    
-                 <img
-                   src="/Premium/Red velvet Donut.png"
-                   alt="Red Velvet"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Red Velvet</div>
-                   <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Brioche donut topped with cream cheese frosting, red velvet cake, and icing sugar.</div>
-                   <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.300/-</div>
-                </div>
-               </div>
-             </div>
-           </div>
-         </div>
-
-                 {/* Sandwiches Section */}
-         <div ref={sandwichesRef} className="py-12">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">SANDWICHES.</h2>
-           <div className="space-y-3">
-             {/* Sandwich Card 1 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Sandwiches/Chicken Malai Boti.png"
-                 alt="Chicken Malai Boti"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Chicken Malai Boti</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Smoked BBQ boti, Cream, Black olives, Good as is or Grilled.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
-                </div>
-             </div>
-
-             {/* Sandwich Card 2 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Sandwiches/Club Sandwich.png"
-                 alt="Club Sandwich"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Club Sandwich</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Triple-layer sandwich with boiled egg, grilled chicken, lettuce, and cucumber.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
-                </div>
-             </div>
-
-             {/* Sandwich Card 3 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Sandwiches/Cubano.png"
-                 alt="Cubano"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cubano</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Chicken pastrami, lettuce, and cheese - best enjoyed grilled.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.450/-</div>
-                </div>
-             </div>
-           </div>
-         </div>
-
-                 {/* Salads Section */}
-         <div ref={saladsRef} className="py-12">
+         {/* Salads Section */}
+         <div ref={saladsRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SALADS.</h2>
-           <div className="space-y-3">
-             {/* Salad Card 1 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Salads/Mediteranian Salad.png"
-                 alt="Mediteranian Salad"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Mediteranian Salad</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Fresh Mediterranean salad with cucumbers, tomatoes, olives, and a zesty dressing.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.350/-</div>
-                </div>
-             </div>
-
-             {/* Salad Card 2 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Salads/Asian Satay Salad.png"
-                 alt="Asian Satay Salad"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Asian Satay Salad</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">MCrisp salad with grilled chicken, peanuts, veggies, and tangy satay dressing.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.350/-</div>
-                </div>
-             </div>
+           <div className="flex space-x-4 overflow-x-auto">
+             {SALAD_ITEMS.map((item) => (
+               <div
+                 key={item.name}
+                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
+                 onClick={() => openItemDetailFromData(item)}
+               >
+                 <img
+                   src={item.image}
+                   alt={item.name}
+                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
+                 />
+                 <div className="p-3">
+                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                 </div>
+               </div>
+             ))}
            </div>
          </div>
 
-                 {/* Drinks Section */}
-         <div ref={drinksRef} className="py-12">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">DRINKS.</h2>
+         {/* Sandwiches Section */}
+         <div ref={sandwichesRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">SANDWICHES.</h2>
+           <div className="flex space-x-4 overflow-x-auto">
+             {SANDWICH_ITEMS.map((item) => (
+               <div
+                 key={item.name}
+                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
+                 onClick={() => openItemDetailFromData(item)}
+               >
+                 <img
+                   src={item.image}
+                   alt={item.name}
+                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
+                 />
+                 <div className="p-3">
+                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                 </div>
+               </div>
+             ))}
+           </div>
+         </div>
+
+         {/* Coffee Section */}
+         <div ref={coffeeRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">COFFEE.</h2>
            <div className="space-y-3">
-             {/* Drink Card 1 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Peach Iced Tea"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Peach Iced Tea</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Sweetened with peach syrup, steeped in tea leaves, the perfect drink for a refreshing experience.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
-                </div>
-             </div>
+             {COFFEE_ITEMS.map((item) => {
+               const priceLabel = getItemPriceLabel(item);
+               return (
+                 <div
+                   key={item.name}
+                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   onClick={() => openItemDetailFromData(item)}
+                 >
+                   <img
+                     src={item.image}
+                     alt={item.name}
+                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                   />
+                   <div className="flex flex-col flex-1 gap-1">
+                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
+                     <div className="text-sm text-gray-600 subtext-font line-clamp-1 item-description">{item.description}</div>
+                     {priceLabel ? (
+                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
+                     ) : null}
+                   </div>
+                 </div>
+               );
+             })}
+           </div>
+         </div>
 
-             {/* Drink Card 2 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Mix Tea Karak"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Mix Tea Karak</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Strong black tea with full-cream milk and sugar - rich, sweet, and bold.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
-                </div>
-             </div>
+         {/* Slow Bar Section */}
+         <div ref={slowBarRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">SLOW BAR.</h2>
+           <div className="space-y-3">
+             {SLOW_BAR_ITEMS.map((item) => {
+               const priceLabel = getItemPriceLabel(item);
+               const itemIsOrderable = isOrderableItem(item);
+               return (
+                 <div
+                   key={item.name}
+                   className={`rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 ${
+                     itemIsOrderable ? "bg-white cursor-pointer" : "bg-gray-50 cursor-default"
+                   }`}
+                   onClick={() => openItemDetailFromData(item)}
+                 >
+                   <img
+                     src={item.image}
+                     alt={item.name}
+                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                   />
+                   <div className="flex flex-col flex-1 gap-1">
+                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
+                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
+                     {priceLabel ? (
+                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
+                     ) : null}
+                   </div>
+                 </div>
+               );
+             })}
+           </div>
+         </div>
 
-             {/* Drink Card 3 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Earl Grey Tea"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Earl Grey Tea</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Smooth black tea with bergamot - light, citrusy, and perfectly fragrant.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.180/-</div>
-                </div>
-             </div>
+         {/* Not Coffee Section */}
+         <div ref={notCoffeeRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">NOT COFFEE.</h2>
+           <div className="space-y-3">
+             {NOT_COFFEE_ITEMS.map((item) => {
+               const priceLabel = getItemPriceLabel(item);
+               return (
+                 <div
+                   key={item.name}
+                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   onClick={() => openItemDetailFromData(item)}
+                 >
+                   <img
+                     src={item.image}
+                     alt={item.name}
+                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                   />
+                   <div className="flex flex-col flex-1 gap-1">
+                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
+                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
+                     {priceLabel ? (
+                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
+                     ) : null}
+                   </div>
+                 </div>
+               );
+             })}
+           </div>
+         </div>
 
-             {/* Drink Card 4 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Masala Tea"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                 <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Masala Tea</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Bold and creamy chai with strong tea, milk, sugar, and traditional spices.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
-                </div>
-             </div>
-
-             {/* Drink Card 5 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Rose Hibiscus"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Rose Hibiscus</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Light pink tea with rose and hibiscus, floral with a slight tang.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
-                </div>
-             </div>
-
-             {/* Drink Card 6 */}
-             <div className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer" onClick={(e) => openItemDetailFromCard(e.currentTarget)}>
-               <img
-                 src="/Drinks/Drink.png"
-                 alt="Cold Chocolate Milk"
-                  className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                />
-                  <div className="flex flex-col flex-1 gap-1">
-                    <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">Cold Chocolate Milk</div>
-                 <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">Thick full-cream chocolate milk, ice cold, rich, and perfectly creamy.</div>
-                 <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">Rs.200/-</div>
-                </div>
-             </div>
+         {/* Matcha Section */}
+         <div ref={matchaRef} className="py-6">
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">MATCHA.</h2>
+           <div className="space-y-3">
+             {MATCHA_ITEMS.map((item) => {
+               const priceLabel = getItemPriceLabel(item);
+               return (
+                 <div
+                   key={item.name}
+                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   onClick={() => openItemDetailFromData(item)}
+                 >
+                   <img
+                     src={item.image}
+                     alt={item.name}
+                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
+                   />
+                   <div className="flex flex-col flex-1 gap-1">
+                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
+                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
+                     {priceLabel ? (
+                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
+                     ) : null}
+                   </div>
+                 </div>
+               );
+             })}
+           </div>
+         </div>
       </div>
-    </div>
-  </div>
-
-      {/* Group Order Modal */}
-      <AnimatePresence>
-        {showGroupOrder && (
-          <>
-            <motion.div
-              className="fixed inset-0 bg-black/50 z-40"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowGroupOrder(false)}
-            />
-            <motion.div
-              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            >
-              <div className="relative">
-                <img src="/Grouporder.png" alt="Group order" className="w-full h-60 object-cover" />
-                <button
-                  onClick={() => setShowGroupOrder(false)}
-                  className="absolute top-4 left-4 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
-                >
-                  <X size={22} className="text-gray-800" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-5 space-y-6">
-                <div className="space-y-1">
-                  <p className="text-2xl font-semibold text-gray-900 heading-font normal-case">{RESTAURANT.name} group order</p>
-                  <p className="text-sm text-gray-700 subtext-font">From <span className="font-semibold heading-font">{RESTAURANT.name}</span></p>
-                  <p className="text-sm text-gray-700 subtext-font">Deliver to <span className="font-semibold heading-font">your table</span></p>
-                </div>
-
-                <div className="space-y-5">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                      <Clock size={18} />
-                    </div>
-                    <div className="flex-1 border-b pb-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-base font-semibold text-gray-900 heading-font">People can order at any time</p>
-                        <MoreHorizontal size={18} className="text-gray-400" />
-                      </div>
-                      <p className="text-sm text-gray-500 subtext-font mt-1">No deadline set</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                      <Wallet size={18} />
-                    </div>
-                    <button
-                      className="flex-1 border-b pb-4 text-left"
-                      onClick={() => setShowWhoPays(true)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <p className="text-base font-semibold text-gray-900 heading-font">
-                          {whoPaysSelection === "all"
-                            ? "You pay for everyone"
-                            : whoPaysSelection === "custom"
-                            ? "You pay a custom amount"
-                            : "Everyone pays for themselves"}
-                        </p>
-                        <Pencil size={16} className="text-gray-500" />
-                      </div>
-                      <p className="text-sm text-gray-500 subtext-font mt-1">
-                        {whoPaysSelection === "all" && spendingLimit
-                          ? `Spending limit: Rs.${spendingLimit}/-`
-                          : whoPaysSelection === "all"
-                          ? "You cover the full bill"
-                          : whoPaysSelection === "custom"
-                          ? `Paying Rs.${customPayAmount || "0"}/-`
-                          : "Up to 18 people"}
-                      </p>
-                    </button>
-                  </div>
-
-                </div>
-              </div>
-
-              <div className="bg-white border-t p-4">
-                <button
-                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
-                  onClick={() => setShowInviteModal(true)}
-                >
-                  Invite people
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Who Pays Modal */}
-      <AnimatePresence>
-        {showWhoPays && (
-          <>
-            <motion.div
-              className="fixed inset-0 bg-black/50 z-40"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowWhoPays(false)}
-            />
-            <motion.div
-              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            >
-              <div className="p-4">
-                <div className="flex items-center gap-3">
-                  <button onClick={() => setShowWhoPays(false)} className="p-2 rounded-full hover:bg-gray-100">
-                    <ChevronLeft size={22} />
-                  </button>
-                  <div className="space-y-2">
-                    <p className="text-2xl font-semibold text-gray-900 heading-font">Choose who pays</p>
-                    <p className="text-sm text-gray-600 subtext-font">
-                      Pay for the whole order or let each person pay for themselves. Payment methods are charged when the order is placed.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                <div className="px-4 space-y-4 pb-8">
-                  <button
-                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "all" ? "border-black" : "border-gray-200"}`}
-                    onClick={() => setWhoPaysSelection("all")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                          <Wallet size={18} />
-                        </div>
-                        <p className="text-base font-semibold text-gray-900 heading-font">You pay for everyone</p>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "all" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
-                        {whoPaysSelection === "all" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
-                      </div>
-                    </div>
-                    <p className="text-sm text-gray-600 subtext-font mt-2">You cover the full bill.</p>
-                    {whoPaysSelection === "all" && (
-                      <div className="mt-3 space-y-2">
-                        <label className="block text-sm font-semibold text-gray-800 heading-font">Spending limit (optional)</label>
-                        <div className="flex items-center rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-                          <span className="text-gray-700 mr-2">Rs.</span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            value={spendingLimit}
-                            onChange={(e) => setSpendingLimit(e.target.value.replace(/\\D/g, ""))}
-                            placeholder="Enter limit"
-                            className="flex-1 bg-transparent focus:outline-none text-sm subtext-font"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </button>
-
-                  <button
-                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "custom" ? "border-black" : "border-gray-200"}`}
-                    onClick={() => setWhoPaysSelection("custom")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                          <Wallet size={18} />
-                        </div>
-                        <p className="text-base font-semibold text-gray-900 heading-font">You pay a custom amount</p>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "custom" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
-                        {whoPaysSelection === "custom" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
-                      </div>
-                    </div>
-                    <p className="text-sm text-gray-600 subtext-font mt-2">Set a custom contribution.</p>
-                    {whoPaysSelection === "custom" && (
-                      <div className="mt-3">
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={customPayAmount}
-                          onChange={(e) => setCustomPayAmount(e.target.value.replace(/\\D/g, ""))}
-                          placeholder="Enter amount"
-                          className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm subtext-font focus:outline-none focus:ring-2 focus:ring-black/60"
-                        />
-                      </div>
-                    )}
-                  </button>
-
-                  <button
-                    className={`w-full rounded-2xl border p-4 text-left ${whoPaysSelection === "self" ? "border-black" : "border-gray-200"}`}
-                    onClick={() => setWhoPaysSelection("self")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                          <Users size={18} />
-                        </div>
-                        <div>
-                          <p className="text-base font-semibold text-gray-900 heading-font">Everyone pays for themselves</p>
-                          <p className="text-sm text-gray-600 subtext-font">Up to 18 people</p>
-                        </div>
-                      </div>
-                      <div className={`w-5 h-5 rounded-full border-2 ${whoPaysSelection === "self" ? "border-black" : "border-gray-300"} flex items-center justify-center`}>
-                        {whoPaysSelection === "self" && <div className="w-2.5 h-2.5 rounded-full bg-black" />}
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-white border-t p-4">
-                <button
-                  className={`w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font ${
-                    whoPaysSelection === "custom" && !customPayAmount ? "opacity-60 cursor-not-allowed" : ""
-                  }`}
-                  onClick={() => {
-                    if (whoPaysSelection === "custom" && !customPayAmount) {
-                      setWhoPaysError("Enter an amount to continue");
-                      return;
-                    }
-                    setWhoPaysError("");
-                    setShowWhoPays(false);
-                  }}
-                  disabled={whoPaysSelection === "custom" && !customPayAmount}
-                >
-                  Save
-                </button>
-                {whoPaysError && (
-                  <p className="text-red-600 text-xs mt-2 subtext-font">{whoPaysError}</p>
-                )}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
       {/* Item Detail Modal */}
       <AnimatePresence>
         {showItemModal && selectedItem && (
@@ -2903,23 +2763,22 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
               exit={{ y: "100%" }}
               transition={{ type: "spring", stiffness: 260, damping: 30 }}
             >
-              <div className="relative">
-                {selectedItem.image && (
-                  <img
-                    src={selectedItem.image}
-                    alt={selectedItem.name}
-                    className="w-full h-56 object-cover"
-                  />
-                )}
-                <button
-                  onClick={handleCloseItemModal}
-                  className="absolute top-4 left-4 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
-                >
-                  <X size={22} className="text-gray-800" />
-                </button>
-              </div>
-
               <div className="flex-1 overflow-y-auto">
+                <div className="relative">
+                  {selectedItem.image && (
+                    <img
+                      src={selectedItem.image}
+                      alt={selectedItem.name}
+                      className="menu-image-surface w-full h-56 object-cover"
+                    />
+                  )}
+                  <button
+                    onClick={handleCloseItemModal}
+                    className="absolute top-4 left-4 z-10 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
+                  >
+                    <X size={22} className="text-gray-800" />
+                  </button>
+                </div>
                 <div className="p-5 space-y-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
@@ -2927,7 +2786,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                         {selectedItem.name}
                       </p>
                       <p className="text-lg font-semibold text-gray-900 heading-font mt-1">
-                        Rs.{(selectedItem.price || 0).toLocaleString()}/-
+                        {getItemPriceLabel(selectedItem, selectedTemperature)}
                       </p>
                     </div>
                   </div>
@@ -2935,6 +2794,82 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   {selectedItem.description && (
                     <p className="text-sm text-gray-600 subtext-font">{selectedItem.description}</p>
                   )}
+
+                  {selectedItem.eggOptions?.length ? (
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-gray-900 heading-font">Type of eggs</p>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedItem.eggOptions.map((eggOption) => (
+                          <button
+                            key={eggOption}
+                            type="button"
+                            onClick={() => setSelectedEggType(eggOption)}
+                            className={`rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+                              selectedEggType === eggOption
+                                ? "border-black bg-black text-white"
+                                : "border-gray-200 bg-gray-50 text-gray-700"
+                            }`}
+                          >
+                            {eggOption}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedItem.temperatureOptions?.length ? (
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-gray-900 heading-font">Temperature</p>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedItem.temperatureOptions.map((temperatureOption) => (
+                          <button
+                            key={temperatureOption}
+                            type="button"
+                            onClick={() => setSelectedTemperature(temperatureOption)}
+                            className={`rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+                              selectedTemperature === temperatureOption
+                                ? "border-black bg-black text-white"
+                                : "border-gray-200 bg-gray-50 text-gray-700"
+                            }`}
+                          >
+                            {temperatureOption}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedItem.addOnOptions?.length ? (
+                    <div className="space-y-3">
+                      <p className="text-sm font-semibold text-gray-900 heading-font">Extra options</p>
+                      <div className="space-y-2">
+                        {selectedItem.addOnOptions.map((option) => {
+                          const isSelected = selectedAddOns.includes(option.label);
+                          return (
+                            <button
+                              key={option.label}
+                              type="button"
+                              onClick={() =>
+                                setSelectedAddOns((prev) =>
+                                  prev.includes(option.label)
+                                    ? prev.filter((label) => label !== option.label)
+                                    : [...prev, option.label],
+                                )
+                              }
+                              className={`flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition-colors ${
+                                isSelected
+                                  ? "border-black bg-black text-white"
+                                  : "border-gray-200 bg-gray-50 text-gray-800"
+                              }`}
+                            >
+                              <span className="text-sm font-medium">{option.label}</span>
+                              <span className="text-sm font-semibold">+ Rs.{option.price}/-</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="flex items-center gap-3">
                     <div className="flex items-center rounded-full bg-gray-100 px-3 py-2">
@@ -2958,28 +2893,56 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     <p className="text-lg font-semibold text-gray-900 heading-font mb-3">
                       Frequently bought together
                     </p>
-                    <div className="space-y-3">
-                      {getSuggestedItems(selectedItem.name).map(suggestion => (
-                        <button
-                          key={suggestion.name}
-                          className="flex items-center gap-4 w-full text-left"
-                          onClick={() => openItemDetailFromData(suggestion)}
-                        >
-                          <img
-                            src={suggestion.image}
-                            alt={suggestion.name}
-                            className="w-20 h-20 rounded-xl object-cover"
-                          />
-                          <div className="flex-1">
-                            <p className="text-base font-semibold text-gray-900 heading-font normal-case">
-                              {suggestion.name}
-                            </p>
-                            <p className="text-sm text-gray-600 subtext-font">
-                              Rs.{(resolvePrice(suggestion.name, suggestion.price) || 0).toLocaleString()}/-
-                            </p>
+                    <div className="flex space-x-4 overflow-x-auto pb-1">
+                      {getSuggestedItems(selectedItem.name).map(suggestion => {
+                        const isSelected = selectedSuggestedItems.includes(suggestion.name);
+                        return (
+                          <div
+                            key={suggestion.name}
+                            className={`relative rounded-lg shadow w-56 flex-shrink-0 cursor-pointer transition-all ${
+                              isSelected
+                                ? "bg-black text-white shadow-lg"
+                                : "bg-white hover:shadow-lg"
+                            }`}
+                            onClick={() => handleAddSuggestedItem(suggestion)}
+                          >
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleAddSuggestedItem(suggestion);
+                              }}
+                              className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full shadow ${
+                                isSelected
+                                  ? "bg-white text-black"
+                                  : "bg-white/95 text-gray-900"
+                              }`}
+                            >
+                              {isSelected ? <Check size={16} /> : <Plus size={16} />}
+                            </button>
+                            <img
+                              src={suggestion.image}
+                              alt={suggestion.name}
+                              className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
+                            />
+                            <div className="p-3">
+                              <p className="font-bold text-xs mb-1 item-title">
+                                {suggestion.name}
+                              </p>
+                              <p
+                                className={`text-xs mb-2 item-description line-clamp-2 ${
+                                  isSelected ? "text-white/75" : "text-gray-500"
+                                }`}
+                              >
+                                {isSelected ? "Included in this order." : "Add this to your order with one tap."}
+                              </p>
+                              <p className="font-bold text-sm item-price">
+                                Rs.{(resolvePrice(suggestion.name, suggestion.price) || 0).toLocaleString()}/-
+                              </p>
+                            </div>
                           </div>
-                        </button>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -2990,232 +2953,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   onClick={handleAddSelectedItem}
                   className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
                 >
-                  Add {itemQuantity} to order • Rs.{((selectedItem.price || 0) * itemQuantity).toLocaleString()}/-
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Invite Modal */}
-      <AnimatePresence>
-        {showInviteModal && (
-          <>
-            <motion.div
-              className="fixed inset-0 bg-black/50 z-40"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowInviteModal(false)}
-            />
-            <motion.div
-              className="fixed inset-0 z-50 bg-white flex flex-col shadow-2xl"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            >
-              <div className="p-4 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <p className="text-2xl font-semibold text-gray-900 heading-font">Invite people</p>
-                  </div>
-                  <button
-                    onClick={() => setShowInviteModal(false)}
-                    className="p-2 rounded-full hover:bg-gray-100"
-                  >
-                    <X size={22} />
-                  </button>
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    className="flex-1 rounded-2xl bg-gray-100 text-gray-900 px-4 py-3 flex items-center justify-center gap-2 heading-font"
-                    onClick={() => {
-                      const inviteLink = `${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`;
-                      copyToClipboard(inviteLink);
-                    }}
-                  >
-                    <Link2 size={16} />
-                    Copy link
-                  </button>
-                  <button
-                    className="flex-1 rounded-2xl bg-gray-100 text-gray-900 px-4 py-3 flex items-center justify-center gap-2 heading-font"
-                    onClick={() => {
-                      const inviteLink = `${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`;
-                      if (navigator.share) {
-                        navigator.share({ title: `${RESTAURANT.name} group order`, url: inviteLink }).catch(() => {});
-                      } else {
-                        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(inviteLink)}`, '_blank');
-                      }
-                    }}
-                  >
-                    <MoreHorizontal size={16} />
-                    More
-                  </button>
-                </div>
-
-                <div className="border-t" />
-
-                <div className="flex justify-center">
-                  <div className="w-64 h-64 bg-white flex items-center justify-center">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(`${window.location.origin}${window.location.pathname}?table=${encodeURIComponent(tableIdentifier)}&group=true`)}`}
-                      alt="Invite QR"
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-auto bg-white border-t p-4">
-                <button
-                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
-                  onClick={() => setShowInviteModal(false)}
-                >
-                  Done
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Join via invite page */}
-      <AnimatePresence>
-        {showJoinPage && (
-          <>
-            <motion.div
-              className="fixed inset-0 bg-white z-50 flex flex-col"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            >
-              <div className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-500 subtext-font">Join group order?</p>
-                </div>
-                <button onClick={() => setShowJoinPage(false)} className="p-2 rounded-full hover:bg-gray-100">
-                  <X size={22} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-5 space-y-6 pb-6">
-                <div className="flex items-center justify-center">
-                  <img src="/Grouporder.png" alt="Group order" className="w-64 h-40 object-contain" />
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-3xl font-semibold text-gray-900 heading-font">Join {RESTAURANT.name} group order?</p>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3 border-b pb-3">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                      <MapPin size={16} />
-                    </div>
-                    <div>
-                      <p className="text-base font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
-                      <p className="text-sm text-gray-600 subtext-font">Table {tableNumber}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 border-b pb-3">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-800">
-                      <Wallet size={16} />
-                    </div>
-                    <div>
-                      <p className="text-base font-semibold text-gray-900 heading-font">
-                        {whoPaysSelection === "all"
-                          ? "Host pays for this order"
-                          : whoPaysSelection === "custom"
-                          ? `Host contributes Rs.${customPayAmount || "0"}/-`
-                          : "Everyone pays for themselves"}
-                      </p>
-                      <p className="text-sm text-gray-600 subtext-font">
-                        {whoPaysSelection === "all" && spendingLimit ? `Limit Rs.${spendingLimit}/-` : ""}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white border-t p-4">
-                <button
-                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
-                  onClick={() => setShowJoinPage(false)}
-                >
-                  Join order
-                </button>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-
-      {/* Group order summary view */}
-      <AnimatePresence>
-        {showGroupSummary && (
-          <>
-            <motion.div
-              className="fixed inset-0 bg-white z-50 flex flex-col"
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 260, damping: 30 }}
-            >
-              <div className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-2xl font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
-                  <p className="text-sm text-gray-600 subtext-font">Table {tableNumber}</p>
-                </div>
-                <button onClick={() => setShowGroupSummary(false)} className="p-2 rounded-full hover:bg-gray-100">
-                  <X size={22} />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-5 space-y-4 pb-4">
-                {renderGroupSummaryItems()}
-
-                <button
-                  onClick={() => setShowGroupSummary(false)}
-                  className="mt-4 flex items-center gap-2 text-black font-semibold heading-font"
-                >
-                  <Plus size={18} />
-                  Add items
-                </button>
-
-                <div className="border-t pt-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
-                    <span>Subtotal</span>
-                    <span className="font-semibold text-gray-900">Rs.{getCartTotal()}/-</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
-                    <span>Service fee (1%)</span>
-                    <span className="font-semibold text-gray-900">Rs.{getServiceFee()}/-</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
-                    <span>GST (5%)</span>
-                    <span className="font-semibold text-gray-900">Rs.{getGstAmount()}/-</span>
-                  </div>
-                  <div className="flex items-center justify-between text-base font-bold text-gray-900 heading-font pt-2">
-                    <span>Total</span>
-                    <span>Rs.{(getCartTotal() + getServiceFee() + getGstAmount()).toLocaleString()}/-</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white border-t p-4">
-                <button
-                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
-                  onClick={() => {
-                    setShowGroupSummary(false);
-                    setShowCart(true);
-                  }}
-                >
-                  Go to checkout
+                  Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
                 </button>
               </div>
             </motion.div>
@@ -3288,7 +3026,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                       <img
                         src={donut.image}
                         alt={donut.name}
-                        className="w-full h-20 object-contain mb-2 flex-shrink-0"
+                        className="menu-image-surface w-full h-20 object-contain mb-2 flex-shrink-0 rounded-xl"
                       />
                       <div className="text-center flex flex-col flex-1">
                         <h3 className="font-semibold text-sm mb-1">{donut.name}</h3>
@@ -3437,7 +3175,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                       <img
                         src={donut.image}
                         alt={donut.name}
-                        className="w-16 h-16 object-contain mr-3"
+                        className="menu-image-surface w-16 h-16 object-contain mr-3 rounded-xl"
                       />
                       <div className="flex-1">
                         <h3 className="font-semibold text-sm">{donut.name}</h3>
@@ -3528,16 +3266,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 <X size={20} />
               </button>
               <div className="text-lg font-semibold heading-font">{RESTAURANT.name}</div>
-              <button
-                className="p-2 rounded-full bg-gray-100"
-                onClick={() => {
-                  setHasViewedGroupOrder(true);
-                  setShowCart(false);
-                  setShowGroupOrder(true);
-                }}
-              >
-                <Users size={18} />
-              </button>
+              <div className="w-10" />
             </div>
 
             <div className="px-5 space-y-4 overflow-y-auto flex-1">
@@ -3550,31 +3279,72 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 {Object.keys(cart).length === 0 ? (
                   <p className="text-center text-gray-500 py-10">Your cart is empty</p>
                 ) : (
-                  Object.entries(cart).map(([key, item]) => (
-                    <div key={key} className="flex items-center justify-between pb-4 border-b">
-                      <div className="flex items-center gap-3">
-                        {item.image && (
-                          <img src={item.image} alt={item.name} className="w-14 h-14 rounded-lg object-cover" />
-                        )}
-                        <div>
-                          <p className="text-lg font-semibold text-gray-900 heading-font">{item.name}</p>
-                          <p className="text-base text-gray-700 subtext-font">Rs.{item.price}/-</p>
+                  <>
+                    {Object.entries(cart).map(([key, item]) => (
+                      <div key={key} className="flex items-center justify-between pb-4 border-b">
+                        <div className="flex items-center gap-3">
+                          {item.image && (
+                            <img src={item.image} alt={item.name} className="w-14 h-14 rounded-lg object-cover" />
+                          )}
+                          <div>
+                            <p className="text-lg font-semibold text-gray-900 heading-font">{item.name}</p>
+                            <p className="text-base text-gray-700 subtext-font">Rs.{item.price}/-</p>
+                            {item.details ? (
+                              <p className="mt-1 text-xs text-gray-500 subtext-font line-clamp-2">{item.details}</p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1.5">
+                          <button onClick={() => removeItemFromCart(key)} className="p-1">
+                            <Minus size={16} />
+                          </button>
+                          <span className="text-base font-semibold heading-font">{item.quantity}</span>
+                          <button
+                            onClick={() => addItemToCart(item.name, item.price, item.image, item.details)}
+                            className="p-1"
+                          >
+                            <Plus size={16} />
+                          </button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1.5">
-                        <button onClick={() => removeItemFromCart(key)} className="p-1">
-                          <Minus size={16} />
-                        </button>
-                        <span className="text-base font-semibold heading-font">{item.quantity}</span>
-                        <button
-                          onClick={() => addItemToCart(item.name, item.price, item.image, item.details)}
-                          className="p-1"
-                        >
-                          <Plus size={16} />
-                        </button>
+                    ))}
+
+                    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900 heading-font">Add a tip</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {[0, 5, 10, 15].map((tip) => (
+                            <button
+                              key={tip}
+                              type="button"
+                              onClick={() => setSelectedTip(tip)}
+                              className={`rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+                                selectedTip === tip
+                                  ? "border-black bg-black text-white"
+                                  : "border-gray-200 bg-white text-gray-700"
+                              }`}
+                            >
+                              {tip === 0 ? "No tip" : `${tip}%`}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label htmlFor="order-notes" className="text-sm font-semibold text-gray-900 heading-font">
+                          Order notes
+                        </label>
+                        <textarea
+                          id="order-notes"
+                          value={orderNotes}
+                          onChange={(event) => setOrderNotes(event.target.value)}
+                          rows={3}
+                          placeholder="Add any notes for your order"
+                          className="mt-3 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 outline-none transition-colors placeholder:text-gray-400 focus:border-black subtext-font"
+                        />
                       </div>
                     </div>
-                  ))
+                  </>
                 )}
                 <button
                   onClick={() => setShowCart(false)}
@@ -3586,10 +3356,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
             </div>
 
             <div className="mt-auto border-t px-5 py-4 space-y-2">
-              <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
-                <span>Subtotal</span>
-                <span className="font-semibold text-gray-900 heading-font">Rs.{getCartTotal()}/-</span>
-              </div>
               <div className="flex items-center justify-between text-sm text-gray-700 subtext-font">
                 <span>Service fee (1%)</span>
                 <span className="font-semibold text-gray-900 heading-font">Rs.{getServiceFee()}/-</span>
@@ -3606,13 +3372,87 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
             <div className="bg-white border-t p-4">
               <button
-                onClick={() => setShowCart(false)}
+                onClick={() => {
+                  setShowCart(false);
+                  window.location.href = `/checkout/pay-fully${tableQuery}`;
+                }}
                 className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
               >
                 Go to checkout
               </button>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showPastOrdersModal && (
+          <>
+            <motion.div
+              className="fixed inset-0 z-50 bg-black/40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowPastOrdersModal(false)}
+            />
+            <motion.div
+              className="fixed inset-x-0 bottom-0 z-[60] mx-auto w-full max-w-md rounded-t-[32px] bg-white p-5 shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 28 }}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xl font-semibold text-gray-900 heading-font">Past order</p>
+                  <p className="mt-1 text-sm text-gray-500 subtext-font">Your most recent order details.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPastOrdersModal(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {lastOrder ? (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-2xl bg-gray-50 p-4">
+                    <p className="text-sm font-semibold text-gray-900 heading-font">Order #{lastOrder.orderNumber}</p>
+                    <p className="mt-1 text-sm text-gray-500 subtext-font">{lastOrder.tableLabel}</p>
+                    <p className="mt-2 text-lg font-semibold text-gray-900 heading-font">
+                      Rs.{lastOrder.total.toLocaleString()}
+                    </p>
+                  </div>
+
+                  <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
+                    {lastOrder.items.map((item) => (
+                      <div key={`${item.name}-${item.details || "base"}`} className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900 heading-font">{item.name}</p>
+                          {item.details ? (
+                            <p className="mt-1 text-xs text-gray-500 subtext-font">{item.details}</p>
+                          ) : null}
+                          <p className="mt-1 text-xs text-gray-400 subtext-font">Qty {item.quantity}</p>
+                        </div>
+                        <p className="text-sm font-semibold text-gray-900 heading-font">
+                          Rs.{(item.price * item.quantity).toLocaleString()}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl bg-gray-50 p-5 text-center">
+                  <p className="text-sm font-semibold text-gray-900 heading-font">No past orders yet</p>
+                  <p className="mt-1 text-sm text-gray-500 subtext-font">
+                    Your most recent order will show up here after checkout.
+                  </p>
+                </div>
+              )}
+            </motion.div>
+          </>
         )}
       </AnimatePresence>
 
@@ -3738,7 +3578,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   </button>
                   <div className="text-right">
                     <p className="text-xs uppercase tracking-widest text-white/70">Table {tableNumber}</p>
-                    <p className="text-lg font-semibold">Crusteez Checkout</p>
+                    <p className="text-lg font-semibold">SIP Checkout</p>
                   </div>
                 </div>
                 <div className="flex items-end justify-between">
@@ -3977,6 +3817,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     </motion.div>
   );
 }
+
 
 
 

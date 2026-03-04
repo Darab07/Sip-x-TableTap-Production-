@@ -1,92 +1,43 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import { Plus, Trash2, Copy, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-
-interface TableConfig {
-  id: number;
-  name: string;
-  isActive: boolean;
-}
+import { getTableUrl, useTableConfig } from '@/hooks/useTableConfig';
 
 export default function Admin() {
-  const [tables, setTables] = useState<TableConfig[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const {
+    tables,
+    addTable,
+    removeTable,
+    toggleTableActive,
+  } = useTableConfig();
 
-  // Load existing table configuration from localStorage
-  useEffect(() => {
-    const savedTables = localStorage.getItem('tableConfig');
-    if (savedTables) {
-      setTables(JSON.parse(savedTables));
-    } else {
-      // Default configuration with 10 tables
-      const defaultTables = Array.from({ length: 10 }, (_, i) => ({
-        id: i + 1,
-        name: `Table${i + 1}`,
-        isActive: true
-      }));
-      setTables(defaultTables);
-      localStorage.setItem('tableConfig', JSON.stringify(defaultTables));
+  const buildTableUrl = (tableId: number) => {
+    const table = tables.find((entry) => entry.id === tableId);
+    if (!table) {
+      return null;
     }
-    setIsLoading(false);
-  }, []);
 
-
-
-  // Toggle table active status
-  const toggleTableStatus = (id: number) => {
-    const updatedTables = tables.map(table => 
-      table.id === id ? { ...table, isActive: !table.isActive } : table
-    );
-    setTables(updatedTables);
-    localStorage.setItem('tableConfig', JSON.stringify(updatedTables));
-    // Reload page to update routing
-    window.location.reload();
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : '';
+    return `${origin}${getTableUrl(table)}`;
   };
 
-  // Copy URL to clipboard
   const copyUrl = (tableId: number) => {
-    const url = `${window.location.origin}/Crusteez/Table${tableId}/home`;
+    const url = buildTableUrl(tableId);
+    if (!url) {
+      return;
+    }
     navigator.clipboard.writeText(url);
   };
 
-  // Open URL in new tab
   const openUrl = (tableId: number) => {
-    const url = `${window.location.origin}/Crusteez/Table${tableId}/home`;
-    window.open(url, '_blank');
+    const url = buildTableUrl(tableId);
+    if (!url) {
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
-
-  // Add a new table
-  const addTable = () => {
-    const newId = Math.max(...tables.map(t => t.id), 0) + 1;
-    const newTable: TableConfig = {
-      id: newId,
-      name: `Table${newId}`,
-      isActive: true
-    };
-    const updatedTables = [...tables, newTable];
-    setTables(updatedTables);
-    localStorage.setItem('tableConfig', JSON.stringify(updatedTables));
-    // Reload page to update routing
-    window.location.reload();
-  };
-
-  // Remove a table
-  const removeTable = (id: number) => {
-    const updatedTables = tables.filter(table => table.id !== id);
-    setTables(updatedTables);
-    localStorage.setItem('tableConfig', JSON.stringify(updatedTables));
-    // Reload page to update routing
-    window.location.reload();
-  };
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
-      </div>
-    );
-  }
 
   return (
     <motion.div
@@ -147,12 +98,15 @@ export default function Admin() {
               <div key={table.id} className="px-4 py-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center space-x-3">
-                    <input
-                      type="checkbox"
-                      checked={table.isActive}
-                      onChange={() => toggleTableStatus(table.id)}
-                      className="w-5 h-5 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                    />
+                    <Button
+                      size="icon"
+                      variant="outline"
+                      className={`w-5 h-5 p-0 rounded ${table.isActive ? 'text-green-600 border-green-200' : 'text-gray-400 border-gray-200'}`}
+                      onClick={() => toggleTableActive(table.id)}
+                      aria-label={table.isActive ? 'Deactivate table' : 'Activate table'}
+                    >
+                      <div className="w-2 h-2 rounded-full bg-current" />
+                    </Button>
                     <span className={`font-medium text-sm ${table.isActive ? 'text-gray-900' : 'text-gray-500'}`}>
                       {table.name}
                     </span>
@@ -160,7 +114,7 @@ export default function Admin() {
                 </div>
                 
                 <div className="text-xs text-gray-500 mb-3 break-all">
-                  {window.location.origin}/Crusteez/{table.name}/home
+                  {buildTableUrl(table.id) || 'Unavailable'}
                 </div>
 
                 <div className="flex items-center space-x-2">
@@ -208,7 +162,7 @@ export default function Admin() {
             <p>• <strong>Toggle:</strong> Enable/disable tables</p>
             <p>• <strong>Copy:</strong> Copy URL to clipboard</p>
             <p>• <strong>Open:</strong> Open table page</p>
-            <p className="mt-2 font-medium">Note: URL structure remains fixed as /Crusteez/TableX/home</p>
+            <p className="mt-2 font-medium">Note: URLs now use /menu?table=TableX</p>
           </div>
         </div>
       </div>

@@ -7,17 +7,22 @@ import { useLocation } from "wouter";
 
 export default function Home() {
   const [customerName, setCustomerName] = useState('ALEX');
-  const [restaurantName] = useState('Crusteez');
+  const [restaurantName] = useState('Sip');
   const [categoryTag] = useState('Starter');
-  const [location, setLocation] = useLocation();
+  const [, setLocation] = useLocation();
 
-  // Extract table number from URL
-  const getTableNumber = () => {
-    const match = location.match(/\/Crusteez\/Table(\d+)\/home/);
-    return match ? match[1] : '7'; // Default to 7 if not found
+  const getTableIdentifier = () => {
+    if (typeof window === "undefined") {
+      return "Table1";
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("table") ?? "Table1";
   };
 
-  const tableNumber = getTableNumber();
+  const tableIdentifier = getTableIdentifier();
+  const tableNumberMatch = tableIdentifier.match(/(\d+)/);
+  const tableNumber = tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || '1';
+  const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
 
   const handleMenuToggle = () => {
     console.log('Toggle navigation menu');
@@ -28,7 +33,7 @@ export default function Home() {
   };
 
   const handleOrderNow = () => {
-    setLocation(`/Crusteez/Table${tableNumber}/menu`); // Use dynamic table number
+    setLocation(`/menu${tableQuery}`); // Use dynamic table identifier
   };
 
   return (
@@ -50,11 +55,11 @@ export default function Home() {
       <div className="absolute inset-0 bg-black bg-opacity-40" />
       {/* Top Navigation Bar */}
       <div className="relative z-10 flex justify-end items-start p-4 pt-12">
-        {/* Crusteez Logo */}
+        {/* Sip Logo */}
         <div className="absolute top-5 right-2 z-20">
           <img
             src="/logo.png"
-            alt="Crusteez Logo"
+            alt="Sip Logo"
             className="w-[90px] h-[90px] object-contain"
           />
         </div>
@@ -85,7 +90,7 @@ export default function Home() {
           </div>
           
           <div className="text-right">
-            <p className="text-black text-sm font-semibold">DHA 2 Crusteez</p>
+            <p className="text-black text-sm font-semibold">F-8/3, Islamabad</p>
             <p className="text-gray-600 text-xs">8 AM - 1 AM</p>
           </div>
         </div>
