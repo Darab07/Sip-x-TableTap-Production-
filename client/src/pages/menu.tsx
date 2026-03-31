@@ -6,7 +6,7 @@ import {
   ChevronLeft,
   ClipboardList,
   LifeBuoy,
-  LogOut,
+  Pencil,
   Plus,
   Minus,
   X,
@@ -55,6 +55,12 @@ const RESTAURANT = {
 const DISPLAY_NAME_KEY = "tabletap_display_name";
 const MENU_AUTH_KEY = "tabletap_menu_authenticated";
 const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
+
+const getDefaultDisplayName = (id: string) => {
+  const compact = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  const suffix = compact.length >= 4 ? compact.slice(-4) : compact.padEnd(4, "0");
+  return `User ${suffix}`;
+};
 
 const getLocalDateStamp = () =>
   new Intl.DateTimeFormat("en-CA").format(new Date());
@@ -547,11 +553,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [promoSlideIndex, setPromoSlideIndex] = useState(0);
   const [displayName, setDisplayName] = useState(() => {
     const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
-    return storedName?.trim() || `User ${userId}`;
+    return storedName?.trim() || getDefaultDisplayName(userId);
   });
   const [displayNameDraft, setDisplayNameDraft] = useState(() => {
     const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
-    return storedName?.trim() || `User ${userId}`;
+    return storedName?.trim() || getDefaultDisplayName(userId);
   });
   const [remoteCatalog, setRemoteCatalog] =
     useState<MenuCatalogApiResponse | null>(null);
@@ -832,10 +838,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   };
 
   const ensureCartAuth = () => {
-    if (isMenuAuthenticated) return true;
-    setAuthError("Please log in to add items to your cart.");
-    openAuthDrawer("login");
-    return false;
+    return true;
   };
 
   const showCustomerWaiterBanner = () => {
@@ -2126,20 +2129,22 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const saveDisplayName = () => {
     const normalizedName = displayNameDraft.trim().slice(0, 32);
-    const finalName = normalizedName || `User ${userId}`;
+    const finalName = normalizedName || getDefaultDisplayName(userId);
     setDisplayName(finalName);
     setDisplayNameDraft(finalName);
     localStorage.setItem(DISPLAY_NAME_KEY, finalName);
   };
 
-  const handleMenuSignOut = async () => {
-    if (supabaseBrowser) {
-      await supabaseBrowser.auth.signOut();
+  const handleEditDisplayName = () => {
+    const nextName = window.prompt("Enter your name", displayName);
+    if (nextName === null) {
+      return;
     }
-    setIsMenuAuthenticated(false);
-    localStorage.removeItem(MENU_AUTH_KEY);
-    setCart({});
-    localStorage.removeItem(getCartKey());
+    const normalizedName = nextName.trim().slice(0, 32);
+    const finalName = normalizedName || getDefaultDisplayName(userId);
+    setDisplayName(finalName);
+    setDisplayNameDraft(finalName);
+    localStorage.setItem(DISPLAY_NAME_KEY, finalName);
   };
 
   // Listen for order placed events from checkout
@@ -2581,6 +2586,37 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     setConfirmNewPassword("");
   };
 
+  const normalizeAuthErrorMessage = (
+    error: unknown,
+    fallback = "Authentication request failed. Please try again.",
+  ) => {
+    if (error instanceof Error && error.message.trim()) {
+      return error.message.trim();
+    }
+    if (typeof error === "string" && error.trim()) {
+      return error.trim();
+    }
+    if (error && typeof error === "object") {
+      const maybeStatus = (error as { status?: number }).status;
+      if (maybeStatus === 504) {
+        return "Signup request timed out (504). Please try again in a moment.";
+      }
+      const maybeMessage = (error as { message?: unknown }).message;
+      if (typeof maybeMessage === "string" && maybeMessage.trim()) {
+        return maybeMessage.trim();
+      }
+      try {
+        const serialized = JSON.stringify(error);
+        if (serialized && serialized !== "{}") {
+          return serialized;
+        }
+      } catch {
+        // No-op
+      }
+    }
+    return fallback;
+  };
+
   const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -2684,6 +2720,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         localStorage.setItem(MENU_AUTH_KEY, "true");
         closeAuthDrawer();
       }
+    } catch (error) {
+      setAuthError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not complete authentication right now. Please try again.",
+        ),
+      );
     } finally {
       setAuthLoading(false);
     }
@@ -2706,6 +2749,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       if (error) {
         setAuthError(error.message);
       }
+    } catch (error) {
+      setAuthError(
+        normalizeAuthErrorMessage(
+          error,
+          "Google sign-in failed. Please try again.",
+        ),
+      );
     } finally {
       setAuthLoading(false);
     }
@@ -2733,26 +2783,19 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         return;
       }
       setAuthMessage("Password reset email sent. Check your inbox.");
+    } catch (error) {
+      setAuthError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not send password reset email right now.",
+        ),
+      );
     } finally {
       setAuthLoading(false);
     }
   };
 
   const renderAuthControls = (compact = false) => {
-    if (!isMenuAuthenticated) {
-      return (
-        <button
-          type="button"
-          onClick={() => openAuthDrawer("login")}
-          className={`rounded-full bg-black text-white transition-colors hover:bg-gray-900 heading-font ${
-            compact ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
-          }`}
-        >
-          Sign Up / Log in
-        </button>
-      );
-    }
-
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -2772,9 +2815,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         <DropdownMenuContent align="end" sideOffset={8} className="w-56 rounded-xl">
           <DropdownMenuLabel className="py-2">
             <p className="text-sm font-semibold text-gray-900 heading-font">{displayName}</p>
-            <p className="text-xs text-gray-500 subtext-font">Signed in</p>
+            <p className="text-xs text-gray-500 subtext-font">This device</p>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleEditDisplayName} className="cursor-pointer">
+            <Pencil size={16} />
+            <span className="heading-font">Edit name</span>
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setShowPastOrdersModal(true)}
             className="cursor-pointer"
@@ -2799,14 +2846,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           >
             <LifeBuoy size={16} />
             <span className="heading-font">Support</span>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onClick={handleMenuSignOut}
-            className="cursor-pointer text-red-600 focus:text-red-600"
-          >
-            <LogOut size={16} />
-            <span className="heading-font">Sign out</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -3020,31 +3059,17 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     <ShoppingCart size={16} />
                     <span className="heading-font">View cart ({getCartItemCount()})</span>
                   </button>
-                  {isMenuAuthenticated ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowSidebarMenu(false);
-                        setShowPastOrdersModal(true);
-                      }}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
-                    >
-                      <ClipboardList size={16} />
-                      <span className="heading-font">View past order</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowSidebarMenu(false);
-                        openAuthDrawer("login");
-                      }}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
-                    >
-                      <ClipboardList size={16} />
-                      <span className="heading-font">Log in / Sign up</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSidebarMenu(false);
+                      setShowPastOrdersModal(true);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    <ClipboardList size={16} />
+                    <span className="heading-font">View past order</span>
+                  </button>
                   {lastOrder ? (
                     <button
                       type="button"

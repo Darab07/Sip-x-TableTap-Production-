@@ -40,20 +40,14 @@ interface StoredOrder {
 const userId = getOrCreateUserID();
 const getStoredOrderKey = () => `lastOrder_${userId}`;
 
-type CardChoice = "saved" | "debit" | "jazzcash" | "easypaisa";
-
-const SAVED_CARD = {
-  label: "4242 ****",
-  last4: "4242",
-  expiry: "08/28",
-};
+type CardChoice = "debit" | "jazzcash" | "easypaisa";
 
 export default function Checkout() {
   const [location, setLocation] = useLocation();
   const [cart, setCart] = useState<Record<string, CartItem>>({});
   const [selectedTip, setSelectedTip] = useState(0);
   const [selectedCardChoice, setSelectedCardChoice] =
-    useState<CardChoice>("saved");
+    useState<CardChoice>("debit");
   const [showNewCardForm, setShowNewCardForm] = useState(false);
   const [cardholderName, setCardholderName] = useState("");
   const [cardNumber, setCardNumber] = useState("");
@@ -98,13 +92,11 @@ export default function Checkout() {
   );
   const total = subtotal + tipAmount + gstAmount + serviceFee;
   const paymentLabel =
-    selectedCardChoice === "saved"
-      ? "Pay with saved card"
-      : selectedCardChoice === "debit"
-        ? "Pay with debit card"
-        : selectedCardChoice === "jazzcash"
-          ? "Pay with JazzCash"
-          : "Pay with Easypaisa";
+    selectedCardChoice === "debit"
+      ? "Pay with debit card"
+      : selectedCardChoice === "jazzcash"
+        ? "Pay with JazzCash"
+        : "Pay with Easypaisa";
   const tableLabel = useMemo(() => {
     if (typeof window === "undefined") return "Table 1";
     const params = new URLSearchParams(window.location.search);
@@ -345,37 +337,6 @@ export default function Checkout() {
             <h2 className="text-lg font-semibold text-gray-900 heading-font">
               Pay with
             </h2>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedCardChoice("saved");
-                setShowNewCardForm(false);
-              }}
-              className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors ${
-                selectedCardChoice === "saved"
-                  ? "border-black bg-white"
-                  : "border-gray-300 bg-[#f5f5f4]"
-              }`}
-            >
-              <p className="text-base font-semibold text-gray-900 heading-font">
-                {SAVED_CARD.label}
-              </p>
-              <div className="flex items-center gap-2">
-                <span className="rounded bg-gray-100 px-2 py-1 text-xs font-semibold text-[#1a3db7]">
-                  VISA
-                </span>
-                <span
-                  className={`flex h-7 w-7 items-center justify-center rounded-md border ${
-                    selectedCardChoice === "saved"
-                      ? "border-black bg-black text-white"
-                      : "border-gray-300 bg-white"
-                  }`}
-                >
-                  {selectedCardChoice === "saved" ? <Check size={15} /> : null}
-                </span>
-              </div>
-            </button>
 
             <button
               type="button"

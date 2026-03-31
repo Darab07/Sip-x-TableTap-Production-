@@ -1,20 +1,30 @@
 // client/src/lib/userId.ts
 
-const USER_ID_KEY = "tempUserId";
+const USER_ID_KEY = "tabletapDeviceUserId";
 
 function generateUserId(): string {
-  const letters = Array.from({ length: 3 }, () =>
-    String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 4 }, () =>
+    alphabet[Math.floor(Math.random() * alphabet.length)],
   ).join("");
-  const numbers = Math.floor(100 + Math.random() * 900); // ensures 3 digits
-  return `${letters}${numbers}`;
 }
 
 export function getOrCreateUserID(): string {
-  let userId = sessionStorage.getItem(USER_ID_KEY);
+  const hasWindow = typeof window !== "undefined";
+  if (!hasWindow) {
+    return generateUserId();
+  }
+
+  let userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) {
+    userId = sessionStorage.getItem(USER_ID_KEY);
+  }
+
   if (!userId) {
     userId = generateUserId();
-    sessionStorage.setItem(USER_ID_KEY, userId);
   }
+
+  localStorage.setItem(USER_ID_KEY, userId);
+  sessionStorage.setItem(USER_ID_KEY, userId);
   return userId;
 }
