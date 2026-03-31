@@ -237,7 +237,7 @@ export class MemStorage implements IStorage {
   }
 
   private removePersonalCartItems(cartId: string) {
-    for (const [id, item] of this.personalCartItems.entries()) {
+    for (const [id, item] of Array.from(this.personalCartItems.entries())) {
       if (item.personalCartId === cartId) {
         this.personalCartItems.delete(id);
       }

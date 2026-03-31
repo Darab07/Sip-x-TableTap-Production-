@@ -1,8 +1,42 @@
 import { Router, type Express, type RequestHandler } from "express";
 import { createServer, type Server } from "http";
+import { randomUUID } from "crypto";
 import { insertUserSchema } from "@shared/schema";
 import { storage } from "./storage";
 import { HttpError } from "./errors";
+import {
+  getWebPushPublicKey,
+  removePushSubscription,
+  startOrderPushTracking,
+  type PushSubscriptionPayload,
+  upsertPushSubscription,
+} from "./push";
+import {
+  createAdminQrCode,
+  deleteAdminQrCode,
+  getAdminEarnings,
+  getAdminQrCodes,
+  getManagerLiveOrders,
+  getManagerMenuItems,
+  getMenuCatalogForBranch,
+  checkInTableFromQr,
+  getOrderTrackerStatus,
+  getPublicTableAccess,
+  getOutletOptions,
+  getOwnerMenuInsights,
+  getOwnerOrdersSummary,
+  getOwnerOrdersTable,
+  getOwnerOrdersTrendByDay,
+  getOwnerOrdersTrendByHourToday,
+  getTableSnapshot,
+  getOwnerDashboardCards,
+  getOwnerSalesTrend,
+  getOwnerTopSellingItems,
+  placeOrderInSupabase,
+  updateManagerMenuItem,
+  updateManagerTableAvailability,
+  updateOrderStatusFromManager,
+} from "./supabase-data";
 
 type AsyncRouteHandler = (
   ...args: Parameters<RequestHandler>
@@ -14,8 +48,41 @@ const asyncHandler = (handler: AsyncRouteHandler): RequestHandler => {
   };
 };
 
+type WaiterCallEvent = {
+  id: string;
+  branchCode: string;
+  tableNumber: number;
+  tableLabel: string;
+  createdAt: string;
+  createdAtMs: number;
+};
+
+const WAITER_CALL_RETENTION_MS = 10 * 60 * 1000;
+const waiterCallEvents: WaiterCallEvent[] = [];
+
+const pruneWaiterCalls = (now = Date.now()) => {
+  const minTs = now - WAITER_CALL_RETENTION_MS;
+  let removeCount = 0;
+  for (const event of waiterCallEvents) {
+    if (event.createdAtMs < minTs) {
+      removeCount += 1;
+      continue;
+    }
+    break;
+  }
+  if (removeCount > 0) {
+    waiterCallEvents.splice(0, removeCount);
+  }
+};
+
 const buildApiRouter = (): Router => {
   const router = Router();
+
+  router.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    res.setHeader("Pragma", "no-cache");
+    next();
+  });
 
   router.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -24,6 +91,444 @@ const buildApiRouter = (): Router => {
   router.get("/test", (_req, res) => {
     res.json({ message: "Server is working!" });
   });
+
+  router.get(
+    "/outlets",
+    asyncHandler(async (_req, res) => {
+      const outlets = await getOutletOptions();
+      res.json({ outlets });
+    }),
+  );
+
+  router.get(
+    "/menu/catalog",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const catalog = await getMenuCatalogForBranch(branchCode);
+      res.json(catalog);
+    }),
+  );
+
+  router.get(
+    "/tables/public-access",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const tableNumber = Number(req.query.tableNumber);
+      if (!Number.isFinite(tableNumber) || tableNumber <= 0) {
+        throw new HttpError(400, "Valid tableNumber is required");
+      }
+      const access = await getPublicTableAccess(branchCode, tableNumber);
+      res.json(access);
+    }),
+  );
+
+  router.post(
+    "/tables/check-in",
+    asyncHandler(async (req, res) => {
+      const { branchCode, tableNumber } = req.body as {
+        branchCode?: string;
+        tableNumber?: number;
+      };
+      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
+        throw new HttpError(400, "Valid tableNumber is required");
+      }
+      const payload = await checkInTableFromQr(
+        branchCode || "f7-islamabad",
+        Math.round(Number(tableNumber)),
+      );
+      res.status(201).json(payload);
+    }),
+  );
+
+  router.get("/push/public-key", (_req, res) => {
+    res.json({ publicKey: getWebPushPublicKey() });
+  });
+
+  router.post(
+    "/waiter/call",
+    asyncHandler(async (req, res) => {
+      const { tableNumber, tableLabel, branchCode } = req.body as {
+        tableNumber?: number;
+        tableLabel?: string;
+        branchCode?: string;
+      };
+      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
+        throw new HttpError(400, "Valid tableNumber is required");
+      }
+
+      const normalizedBranchCode =
+        typeof branchCode === "string" && branchCode.trim()
+          ? branchCode.trim()
+          : "f7-islamabad";
+      const normalizedTableNumber = Math.round(Number(tableNumber));
+      const normalizedTableLabel =
+        typeof tableLabel === "string" && tableLabel.trim()
+          ? tableLabel.trim()
+          : `Table ${normalizedTableNumber}`;
+
+      const createdAtMs = Date.now();
+      const event: WaiterCallEvent = {
+        id: randomUUID(),
+        branchCode: normalizedBranchCode,
+        tableNumber: normalizedTableNumber,
+        tableLabel: normalizedTableLabel,
+        createdAt: new Date(createdAtMs).toISOString(),
+        createdAtMs,
+      };
+
+      waiterCallEvents.push(event);
+      pruneWaiterCalls(createdAtMs);
+
+      res.status(201).json({ event });
+    }),
+  );
+
+  router.get(
+    "/manager/waiter-calls",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const sinceRaw =
+        typeof req.query.since === "string" ? Number(req.query.since) : 0;
+      const since = Number.isFinite(sinceRaw) ? Math.max(0, sinceRaw) : 0;
+
+      pruneWaiterCalls();
+
+      const events = waiterCallEvents.filter(
+        (event) => event.branchCode === branchCode && event.createdAtMs > since,
+      );
+
+      res.json({ events });
+    }),
+  );
+
+  router.post(
+    "/orders/place",
+    asyncHandler(async (req, res) => {
+      let order;
+      try {
+        order = await placeOrderInSupabase(req.body);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to place order";
+        throw new HttpError(400, message);
+      }
+      res.status(201).json({ order });
+    }),
+  );
+
+  router.get(
+    "/manager/live-orders",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const orders = await getManagerLiveOrders(branchCode);
+      res.json({ orders });
+    }),
+  );
+
+  router.get(
+    "/manager/menu-items",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const items = await getManagerMenuItems(branchCode);
+      res.json({ items });
+    }),
+  );
+
+  router.patch(
+    "/manager/menu-items/:itemId",
+    asyncHandler(async (req, res) => {
+      const { itemId } = req.params;
+      const { price, available } = req.body as {
+        price?: number;
+        available?: boolean;
+      };
+      if (!itemId) {
+        throw new HttpError(400, "itemId is required");
+      }
+      const item = await updateManagerMenuItem({ id: itemId, price, available });
+      res.json({ item });
+    }),
+  );
+
+  router.get(
+    "/manager/table-management",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const snapshot = await getTableSnapshot(branchCode);
+      res.json(snapshot);
+    }),
+  );
+
+  router.patch(
+    "/manager/tables/:tableId/availability",
+    asyncHandler(async (req, res) => {
+      const { tableId } = req.params;
+      const { availability } = req.body as {
+        availability?: "available" | "unavailable";
+      };
+      if (!tableId || !availability) {
+        throw new HttpError(400, "tableId and availability are required");
+      }
+      const table = await updateManagerTableAvailability({ tableId, availability });
+      res.json({ table });
+    }),
+  );
+
+  router.patch(
+    "/manager/orders/:orderNumber/status",
+    asyncHandler(async (req, res) => {
+      const { orderNumber } = req.params;
+      const { status } = req.body as {
+        status?: "accepted" | "preparing" | "ready" | "completed";
+      };
+      if (!orderNumber || !status) {
+        throw new HttpError(400, "orderNumber and status are required");
+      }
+      const updated = await updateOrderStatusFromManager({ orderNumber, status });
+      res.json({ order: updated });
+    }),
+  );
+
+  router.get(
+    "/orders/:orderNumber/status",
+    asyncHandler(async (req, res) => {
+      const { orderNumber } = req.params;
+      if (!orderNumber) {
+        throw new HttpError(400, "orderNumber is required");
+      }
+      const order = await getOrderTrackerStatus(orderNumber);
+      res.json({ order });
+    }),
+  );
+
+  router.get(
+    "/admin/qr-codes",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const rows = await getAdminQrCodes(branchCode);
+      res.json({ rows });
+    }),
+  );
+
+  router.post(
+    "/admin/qr-codes",
+    asyncHandler(async (req, res) => {
+      const { tableNumber, branchCode } = req.body as {
+        tableNumber?: number;
+        branchCode?: string;
+      };
+      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
+        throw new HttpError(400, "Valid tableNumber is required");
+      }
+      await createAdminQrCode(
+        branchCode || "f7-islamabad",
+        Math.round(Number(tableNumber)),
+      );
+      const rows = await getAdminQrCodes(branchCode || "f7-islamabad");
+      res.status(201).json({ rows });
+    }),
+  );
+
+  router.delete(
+    "/admin/qr-codes/:id",
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      if (!id) {
+        throw new HttpError(400, "id is required");
+      }
+      await deleteAdminQrCode(id);
+      res.json({ ok: true });
+    }),
+  );
+
+  router.get(
+    "/dashboard/admin/earnings",
+    asyncHandler(async (_req, res) => {
+      const payload = await getAdminEarnings();
+      res.json(payload);
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/cards",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const cards = await getOwnerDashboardCards(branchCode);
+      res.json(cards);
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/sales-trend",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
+      const trend = await getOwnerSalesTrend(branchCode, rangeDays);
+      res.json({ points: trend });
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/top-items",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
+      const rows = await getOwnerTopSellingItems(branchCode, rangeDays);
+      res.json({ rows });
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/table-management",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const snapshot = await getTableSnapshot(branchCode);
+      res.json(snapshot);
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/menu-insights",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const dateRange =
+        typeof req.query.dateRange === "string"
+          ? (req.query.dateRange as "today" | "this-week" | "this-month")
+          : "today";
+      const category =
+        typeof req.query.category === "string" ? req.query.category : "all";
+      const payload = await getOwnerMenuInsights(branchCode, dateRange, category);
+      res.json(payload);
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/orders/summary",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const summary = await getOwnerOrdersSummary(branchCode);
+      res.json(summary);
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/orders/trend",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const mode = typeof req.query.mode === "string" ? req.query.mode : "day";
+      if (mode === "hour") {
+        const points = await getOwnerOrdersTrendByHourToday(branchCode);
+        res.json({ points });
+        return;
+      }
+      const rangeDays = Number(req.query.rangeDays ?? 7) || 7;
+      const points = await getOwnerOrdersTrendByDay(branchCode, rangeDays);
+      res.json({ points });
+    }),
+  );
+
+  router.get(
+    "/dashboard/owner/orders/table",
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const rangeDays = Number(req.query.rangeDays ?? 31) || 31;
+      const rows = await getOwnerOrdersTable(branchCode, rangeDays);
+      res.json({ rows });
+    }),
+  );
+
+  router.post(
+    "/push/subscribe",
+    asyncHandler(async (req, res) => {
+      const { userId, subscription } = req.body as {
+        userId?: string;
+        subscription?: PushSubscriptionPayload;
+      };
+
+      if (!userId || !subscription?.endpoint || !subscription?.keys?.auth || !subscription?.keys?.p256dh) {
+        throw new HttpError(400, "userId and valid PushSubscription are required");
+      }
+
+      upsertPushSubscription(userId, subscription);
+      res.status(201).json({ ok: true });
+    }),
+  );
+
+  router.post(
+    "/push/unsubscribe",
+    asyncHandler(async (req, res) => {
+      const { userId, endpoint } = req.body as { userId?: string; endpoint?: string };
+      if (!userId || !endpoint) {
+        throw new HttpError(400, "userId and endpoint are required");
+      }
+
+      removePushSubscription(userId, endpoint);
+      res.json({ ok: true });
+    }),
+  );
+
+  router.post(
+    "/orders/track/start",
+    asyncHandler(async (req, res) => {
+      const { userId, orderNumber, tableLabel } = req.body as {
+        userId?: string;
+        orderNumber?: string;
+        tableLabel?: string;
+      };
+
+      if (!userId || !orderNumber || !tableLabel) {
+        throw new HttpError(400, "userId, orderNumber and tableLabel are required");
+      }
+
+      await startOrderPushTracking({ userId, orderNumber, tableLabel });
+      res.status(202).json({ ok: true });
+    }),
+  );
 
   router.get(
     "/users/:username",

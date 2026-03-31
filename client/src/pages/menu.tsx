@@ -1,11 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   Check,
   BellRing,
   ChevronLeft,
-  ChevronDown,
   ClipboardList,
+  LifeBuoy,
   LogOut,
   Plus,
   Minus,
@@ -13,10 +13,30 @@ import {
   ShoppingCart,
   Clock,
   MapPin,
+  Menu as MenuIcon,
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { getOrCreateUserID } from "@/lib/userID";
+import {
+  checkInTableFromQrApi,
+  callWaiterApi,
+  fetchOrderStatus,
+  fetchMenuCatalog,
+  fetchTablePublicAccess,
+  type MenuCatalogApiResponse,
+} from "@/lib/tabletap-supabase-api";
+import { supabaseBrowser } from "@/lib/supabase";
 
 const userId = getOrCreateUserID();
 
@@ -32,7 +52,22 @@ const RESTAURANT = {
   hours: "8 AM - 1 AM",
 };
 
-const BRAND_PRIMARY = "#91bda6";
+const DISPLAY_NAME_KEY = "tabletap_display_name";
+const MENU_AUTH_KEY = "tabletap_menu_authenticated";
+const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
+
+const getLocalDateStamp = () =>
+  new Intl.DateTimeFormat("en-CA").format(new Date());
+
+const PROMO_SLIDES = [
+  {
+    title: "Save TableTap to your Home Screen",
+    description:
+      "Get order tracking notifications on your phone when your order is confirmed, being prepared, and served.",
+    cta: "Add to Home Screen",
+    image: "/Sip%20Homescreen.png",
+  },
+];
 
 type CartItem = {
   name: string;
@@ -41,6 +76,8 @@ type CartItem = {
   image?: string;
   details?: string;
   addedBy: string;
+  menuItemId?: string;
+  baseItemName?: string;
 };
 
 type StoredOrder = {
@@ -52,6 +89,12 @@ type StoredOrder = {
   gstAmount: number;
   tableLabel: string;
   notes: string;
+  status: 'placed' | 'confirmed' | 'preparing' | 'served';
+  statusHistory: Array<{
+    status: string;
+    timestamp: number;
+    message: string;
+  }>;
   items: Array<{
     name: string;
     price: number;
@@ -67,378 +110,155 @@ type MenuItemAddOn = {
 };
 
 type MenuItemData = {
+  menuItemId?: string;
   name: string;
   image?: string;
   description?: string;
   price?: number;
+  isAvailable?: boolean;
   eggOptions?: string[];
   temperatureOptions?: string[];
   temperaturePrices?: Record<string, number>;
   addOnOptions?: MenuItemAddOn[];
 };
 
-const PRICE_MAP: Record<string, number> = {
-  "plain chocolate": 150,
-  "plain glaze": 150,
-  "strawberry sprinkle": 150,
-  "after eight": 240,
-  "coconut truffle": 240,
-  "cookies and cream": 240,
-  "ferrero rocher": 240,
-  "nutella bon": 240,
-  "oreo chocolate": 240,
-  "salted caramel": 240,
-  "bagelish": 300,
-  "bavarian cream": 300,
-  "benoffee": 300,
-  "blueberry cream cheese": 300,
-  "choco fudge": 300,
-  "chocolate malt": 300,
-  "hazelnutty": 300,
-  "jammie": 300,
-  "jelly donut": 300,
-  "kinder bueno": 300,
-  "lemon curd": 300,
-  "lotus": 300,
-  "peanut caramel": 300,
-  "pistachio delight": 300,
-  "rabri": 300,
-  "red velvet": 300,
-  "grilled chicken pesto": 1795,
-  "mexi beef focaccia": 1995,
-  "sun kissed chicken": 1895,
-  "classic club": 1545,
-  "focaccia fillet": 1595,
-  "beef melt": 1895,
-  "mediteranian salad": 350,
-  "asian satay salad": 350,
-  "peach iced tea": 180,
-  "mix tea karak": 180,
-  "earl grey tea": 180,
-  "masala tea": 200,
-  "rose hibiscus": 200,
-  "cold chocolate milk": 200,
-  "cold coffee": 220,
-  "hot coffee": 200,
+type JoinRequest = {
+  fromUserId: string;
+  fromUserName: string;
+  targetUserId: string;
+  timestamp: number;
 };
 
+type JoinRequestResponse = {
+  targetUserId: string;
+  status: "accepted" | "declined";
+  timestamp: number;
+};
+
+type PendingJoinRequest = {
+  targetUserId: string;
+  timestamp: number;
+  status: "pending";
+};
+
+const normalizeItemBaseName = (value: string) =>
+  value.trim().toLowerCase().split(/\s\(|\s\+/)[0]?.trim() || value.trim().toLowerCase();
+
+const mapCatalogItemToMenuItemData = (
+  item: MenuCatalogApiResponse["items"][number],
+): MenuItemData => {
+  const eggGroup = item.optionGroups.find(
+    (group) => group.name.toLowerCase() === "egg type",
+  );
+  const temperatureGroup = item.optionGroups.find(
+    (group) => group.name.toLowerCase() === "temperature",
+  );
+  const addOnsGroup = item.optionGroups.find(
+    (group) => group.name.toLowerCase() === "add-ons",
+  );
+
+  const temperaturePrices =
+    temperatureGroup?.pricingMode === "absolute"
+      ? Object.fromEntries(
+          temperatureGroup.values.map((value) => [
+            value.label,
+            Number(value.priceOverride ?? value.priceDelta ?? 0),
+          ]),
+        )
+      : undefined;
+
+  const hasAbsoluteTemperaturePrice =
+    Boolean(temperaturePrices) &&
+    Object.keys(temperaturePrices ?? {}).length > 0;
+
+  const basePrice =
+    item.isPriceOnRequest || (hasAbsoluteTemperaturePrice && item.basePrice <= 0)
+      ? undefined
+      : item.basePrice;
+
+  return {
+    menuItemId: item.id,
+    name: item.name,
+    image: item.imageUrl ?? undefined,
+    description: item.description ?? undefined,
+    price: basePrice,
+    isAvailable: item.isAvailable,
+    eggOptions: eggGroup?.values.map((value) => value.label) ?? undefined,
+    temperatureOptions:
+      temperatureGroup?.values.map((value) => value.label) ?? undefined,
+    temperaturePrices,
+    addOnOptions:
+      addOnsGroup?.values.map((value) => ({
+        label: value.label,
+        price: Number(value.priceOverride ?? value.priceDelta ?? 0),
+      })) ?? undefined,
+  };
+};
+
+const OFFERED_MENU_ITEM_NAMES_BY_CATEGORY = {
+  breakfast: [
+    "Turkish Eggs",
+    "Sunny Hummus Bowl",
+    "Avocado Toast",
+    "French Toast",
+    "Steak & Eggs",
+  ],
+  salads: ["Golden Crunch", "Ceaser salad"],
+  sandwiches: [
+    "Grilled Chicken Pesto",
+    "Mexi Beef Focaccia",
+    "Sun Kissed Chicken",
+    "Classic Club",
+    "Focaccia Fillet",
+    "Beef Melt",
+  ],
+  coffee: [
+    "Espresso",
+    "Cappuccino",
+    "Macchiato",
+    "Cortado",
+    "Flat White",
+    "Latte",
+    "Spanish Latte",
+    "French Vanilla Gingerbread",
+    "Caramel Cinnamon",
+    "Hazelnut",
+    "Butter Scotch",
+    "Tiramisu",
+    "Coconut",
+    "Mocha",
+  ],
+  "slow-bar": ["Tier 1", "Tier 2", "Tier 3"],
+  "not-coffee": [
+    "Hot/Iced Chocolate",
+    "Sip Signature Chocolate",
+    "Apple Mojito",
+    "Raspberry Mojito",
+    "Pina Coco and Green Apple Mojito",
+    "Passion Fruit Mojito",
+    "Lemon Iced Tea",
+    "Peach Iced Tea",
+  ],
+  matcha: ["Matcha", "Spanish Matcha", "Stawberry Matcha", "Coconut Matcha"],
+} as const;
+
+const OFFERED_MENU_CATEGORY_SLUGS = new Set(
+  Object.keys(OFFERED_MENU_ITEM_NAMES_BY_CATEGORY),
+);
+
+const OFFERED_MENU_ITEM_NAME_LOOKUP = new Map<string, Set<string>>(
+  Object.entries(OFFERED_MENU_ITEM_NAMES_BY_CATEGORY).map(([slug, names]) => [
+    slug,
+    new Set(names.map((name) => name.toLowerCase())),
+  ]),
+);
+
 const SUGGESTED_ITEMS = [
-  { name: "Turkish Eggs", price: 1395, image: "/Breakfast/Turkish Eggs.jpg" },
-  { name: "Golden Crunch", price: 1295, image: "/Salads/Mediteranian Salad.png" },
-  { name: "Classic Club", price: 1545, image: "/Sandwiches/Club Sandwich.png" },
-  { name: "Cold Coffee", price: 220, image: "/Drinks/Drink.png" },
+  { name: "Turkish Eggs", price: 1395 },
+  { name: "Golden Crunch", price: 1295 },
+  { name: "Classic Club", price: 1545 },
+  { name: "Latte", price: 240 },
 ];
-
-const BREAKFAST_ITEMS: MenuItemData[] = [
-  {
-    name: "Turkish Eggs",
-    image: "/Breakfast/Turkish Eggs.jpg",
-    description: "Creamy garlic yogurt topped with soft poached eggs, finished with spiced chili butter, fresh herbs, and served alongside warm, crusty sourdough.",
-    price: 1395,
-    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
-  },
-  {
-    name: "Sunny Hummus Bowl",
-    image: "/Breakfast/Hummus Bowl.avif",
-    description: "Creamy hummus topped with roasted cherry tomatoes, perfectly cooked eggs, and a drizzle of signature cream sauce.",
-    price: 1695,
-    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
-  },
-  {
-    name: "Avocado Toast",
-    image: "/Breakfast/Avocado Toast.jpg",
-    description: "Creamy smashed avocado layered on warm, toasted ciabatta, topped with eggs, finished with olive oil, lemon, and a sprinkle of chili flakes.",
-    price: 1595,
-    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
-  },
-  {
-    name: "French Toast",
-    image: "/Breakfast/French Toast.jpg",
-    description: "Fluffy brioche slices soaked in rich custard, golden fried, and served with maple syrup, Nutella, or Lotus Biscoff.",
-    price: 1295,
-  },
-  {
-    name: "Steak & Eggs",
-    image: "/Breakfast/Steak and Eggs.avif",
-    description: "Seared beef or tender chicken paired with eggs your way and bread bites drenched in our signature cream sauce.",
-    price: 2395,
-    eggOptions: ["Poached Egg", "Scrambled Egg", "Sunny Egg"],
-  },
-];
-
-const SALAD_ADD_ONS: MenuItemAddOn[] = [
-  { label: "Fries", price: 695 },
-  { label: "Cheese", price: 75 },
-];
-
-const DRINK_ADD_ONS: MenuItemAddOn[] = [
-  { label: "Upsize", price: 275 },
-  { label: "Extra Shot/ Decaf", price: 245 },
-  { label: "Extra Flavour", price: 195 },
-  { label: "Extra Matcha", price: 145 },
-  { label: "Lactose Free", price: 145 },
-];
-
-const SALAD_ITEMS: MenuItemData[] = [
-  {
-    name: "Golden Crunch",
-    image: "/Salads/Mediteranian Salad.png",
-    description: "A hearty blend of crisp greens and golden, crunchy bites, finished with a savory touch of parmesan for perfect balance and flavor.",
-    price: 1295,
-    addOnOptions: SALAD_ADD_ONS,
-  },
-  {
-    name: "Ceaser salad",
-    image: "/Salads/Asian Satay Salad.png",
-    description: "A fresh, crisp take on the classic Caesar with tender chicken, vibrant greens, a rich parmesan finish, and our signature creamy dressing.",
-    price: 1695,
-    addOnOptions: SALAD_ADD_ONS,
-  },
-];
-
-const SANDWICH_ITEMS: MenuItemData[] = [
-  {
-    name: "Grilled Chicken Pesto",
-    image: "/Sandwiches/Chicken Malai Boti.png",
-    description: "Grilled chicken with house-made pesto and melted cheese on sourdough. Served with crisp green salad and golden potato wedges.",
-    price: 1795,
-  },
-  {
-    name: "Mexi Beef Focaccia",
-    image: "/Sandwiches/Cubano.png",
-    description: "Flavor-packed beef with Mexican spices in warm focaccia. Served with golden fries and crisp green salad.",
-    price: 1995,
-  },
-  {
-    name: "Sun Kissed Chicken",
-    image: "/Sandwiches/Chicken Malai Boti.png",
-    description: "Tender grilled chicken with creamy avocado and tangy sun-dried tomatoes on fresh sourdough. Served with crisp green salad and golden potato wedges.",
-    price: 1895,
-  },
-  {
-    name: "Classic Club",
-    image: "/Sandwiches/Club Sandwich.png",
-    description: "Triple-layer delight with chicken, egg, cheese and crisp veggies. Served with fries and creamy coleslaw.",
-    price: 1545,
-  },
-  {
-    name: "Focaccia Fillet",
-    image: "/Sandwiches/Cubano.png",
-    description: "Crispy fried chicken in warm focaccia with fresh greens and signature sauce. Served with fries and crisp green salad.",
-    price: 1595,
-  },
-  {
-    name: "Beef Melt",
-    image: "/Sandwiches/Club Sandwich.png",
-    description: "Succulent beef, melted cheese, and a touch of seasoning on rustic sourdough bread. Served with potato wedges and crunchy green salad.",
-    price: 1895,
-  },
-];
-
-const COFFEE_ITEMS: MenuItemData[] = [
-  {
-    name: "Espresso",
-    image: "/Drinks/Drink.png",
-    description: "Rich espresso shot served hot.",
-    price: 200,
-  },
-  {
-    name: "Cappuccino",
-    image: "/Drinks/Drink.png",
-    description: "Classic cappuccino served hot with a velvety finish.",
-    price: 220,
-  },
-  {
-    name: "Macchiato",
-    image: "/Drinks/Drink.png",
-    description: "Bold macchiato served hot.",
-    price: 200,
-  },
-  {
-    name: "Cortado",
-    image: "/Drinks/Drink.png",
-    description: "Balanced cortado served hot.",
-    price: 220,
-  },
-  {
-    name: "Flat White",
-    image: "/Drinks/Drink.png",
-    description: "Smooth flat white served hot.",
-    price: 220,
-  },
-  {
-    name: "Latte",
-    image: "/Drinks/Drink.png",
-    description: "Creamy latte with your choice of hot or iced.",
-    price: 240,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Spanish Latte",
-    image: "/Drinks/Drink.png",
-    description: "Sweet Spanish latte with your choice of hot or iced.",
-    price: 260,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "French Vanilla Gingerbread",
-    image: "/Drinks/Drink.png",
-    description: "French vanilla gingerbread coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Caramel Cinnamon",
-    image: "/Drinks/Drink.png",
-    description: "Caramel cinnamon coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Hazelnut",
-    image: "/Drinks/Drink.png",
-    description: "Hazelnut coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Butter Scotch",
-    image: "/Drinks/Drink.png",
-    description: "Butterscotch coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Tiramisu",
-    image: "/Drinks/Drink.png",
-    description: "Tiramisu coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Coconut",
-    image: "/Drinks/Drink.png",
-    description: "Coconut coffee with your choice of hot or iced.",
-    price: 280,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Mocha",
-    image: "/Drinks/Drink.png",
-    description: "Chocolate mocha with your choice of hot or iced.",
-    price: 260,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
-
-const SLOW_BAR_ITEMS: MenuItemData[] = [
-  {
-    name: "Tier 1",
-    image: "/Drinks/Drink.png",
-    description: "Ask the barista for the current slow bar selection.",
-  },
-  {
-    name: "Tier 2",
-    image: "/Drinks/Drink.png",
-    description: "Available hot or cold.",
-    temperatureOptions: ["Hot", "Cold"],
-    temperaturePrices: {
-      Hot: 1395,
-      Cold: 1395,
-    },
-  },
-  {
-    name: "Tier 3",
-    image: "/Drinks/Drink.png",
-    description: "Available hot or cold.",
-    temperatureOptions: ["Hot", "Cold"],
-    temperaturePrices: {
-      Hot: 975,
-      Cold: 975,
-    },
-  },
-].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
-
-const NOT_COFFEE_ITEMS: MenuItemData[] = [
-  {
-    name: "Hot/Iced Chocolate",
-    image: "/Drinks/Drink.png",
-    description: "Hot or iced chocolate.",
-    price: 795,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Sip Signature Chocolate",
-    image: "/Drinks/Drink.png",
-    description: "Sip signature chocolate, available hot or iced.",
-    price: 1195,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Apple Mojito",
-    image: "/Drinks/Drink.png",
-    description: "Classic apple mojito.",
-    price: 645,
-  },
-  {
-    name: "Raspberry Mojito",
-    image: "/Drinks/Drink.png",
-    description: "Raspberry mojito.",
-    price: 645,
-  },
-  {
-    name: "Pina Coco and Green Apple Mojito",
-    image: "/Drinks/Drink.png",
-    description: "Pina coco and green apple mojito.",
-    price: 645,
-  },
-  {
-    name: "Passion Fruit Mojito",
-    image: "/Drinks/Drink.png",
-    description: "Passion fruit mojito.",
-    price: 645,
-  },
-  {
-    name: "Lemon Iced Tea",
-    image: "/Drinks/Drink.png",
-    description: "Lemon iced tea.",
-    price: 625,
-  },
-  {
-    name: "Peach Iced Tea",
-    image: "/Drinks/Drink.png",
-    description: "Peach iced tea.",
-    price: 625,
-  },
-].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
-
-const MATCHA_ITEMS: MenuItemData[] = [
-  {
-    name: "Matcha",
-    image: "/Drinks/Drink.png",
-    description: "Classic matcha, available hot or iced.",
-    price: 795,
-    temperatureOptions: ["Hot", "Iced"],
-  },
-  {
-    name: "Spanish Matcha",
-    image: "/Drinks/Drink.png",
-    description: "Spanish-style matcha.",
-    price: 895,
-  },
-  {
-    name: "Stawberry Matcha",
-    image: "/Drinks/Drink.png",
-    description: "Strawberry matcha.",
-    price: 1295,
-  },
-  {
-    name: "Coconut Matcha",
-    image: "/Drinks/Drink.png",
-    description: "Coconut matcha.",
-    price: 1395,
-  },
-].map((item) => ({ ...item, addOnOptions: DRINK_ADD_ONS }));
 
 // Smart Counter Component
 function SmartCounter({ 
@@ -544,96 +364,6 @@ function SmartCounter({
   );
 }
 
-// Modal Smart Counter Component
-function ModalSmartCounter({ 
-  donutName, 
-  price, 
-  count, 
-  onAdd, 
-  onRemove 
-}: { 
-  donutName: string; 
-  price: number; 
-  count: number; 
-  onAdd: () => void; 
-  onRemove: () => void; 
-}) {
-  const [isAnimating, setIsAnimating] = useState(false);
-
-  const handleAddToOrder = () => {
-    setIsAnimating(true);
-    onAdd();
-  };
-
-  const handleIncrement = () => {
-    onAdd();
-  };
-
-  const handleDecrement = () => {
-    if (count <= 1) {
-      setIsAnimating(false);
-      onRemove();
-    } else {
-      onRemove();
-    }
-  };
-
-  return (
-    <motion.div
-      layout
-      className="flex items-center justify-center"
-      transition={{ duration: 0.3, ease: "easeInOut" }}
-    >
-      {count === 0 ? (
-        <motion.button
-          initial={{ scale: 1 }}
-          animate={{ scale: isAnimating ? 0.9 : 1 }}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={handleAddToOrder}
-          className="bg-black text-white px-4 py-2 rounded text-sm font-medium hover:bg-gray-800 transition-colors"
-        >
-          Add to Cart
-        </motion.button>
-      ) : (
-        <motion.div
-          initial={{ scale: 0.8, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.8, opacity: 0 }}
-          className="flex items-center justify-center space-x-2 bg-black text-white px-4 py-2 rounded text-sm font-medium w-[110px]"
-        >
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={handleDecrement}
-            className="w-5 h-5 flex items-center justify-center rounded-full bg-white bg-opacity-20 hover:bg-opacity-30 transition-all"
-          >
-            <Minus size={12} />
-          </motion.button>
-          
-          <motion.span
-            key={count}
-            initial={{ scale: 1.2, y: -10 }}
-            animate={{ scale: 1, y: 0 }}
-            className="font-bold text-xs min-w-[16px] text-center"
-          >
-            {count}
-          </motion.span>
-          
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={handleIncrement}
-            className="w-5 h-5 flex items-center justify-center rounded-full bg-white bg-opacity-20 hover:bg-opacity-30 transition-all"
-          >
-            <Plus size={12} />
-          </motion.button>
-        </motion.div>
-      )}
-    </motion.div>
-  );
-}
-
 export default function Menu() {
 
   const getTableIdentifier = () => {
@@ -648,16 +378,38 @@ const tableIdentifier = getTableIdentifier();
 const tableNumberMatch = tableIdentifier.match(/(\d+)/);
 const tableNumber =
   tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || "1";
+const tableNumberNumeric = Number(tableNumber) || 1;
 const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
+
+  const getTableNumberFromLabel = (label?: string) => {
+    if (!label) return "";
+    const match = label.match(/(\d+)/);
+    return match ? match[1] : "";
+  };
+
+  const getStoredOrderForCurrentTable = () => {
+    const savedOrder = localStorage.getItem(`lastOrder_${userId}`);
+    if (!savedOrder) return null;
+    try {
+      const parsed = JSON.parse(savedOrder) as StoredOrder;
+      const parsedStatus = String(
+        (parsed as { status?: unknown }).status ?? "",
+      );
+      if (parsedStatus === "served" || parsedStatus === "completed") {
+        localStorage.removeItem(`lastOrder_${userId}`);
+        return null;
+      }
+      const savedTableNumber = getTableNumberFromLabel(parsed.tableLabel);
+      if (savedTableNumber !== tableNumber) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
   
   const [activeTab, setActiveTab] = useState("Breakfast");
-  const [showDonutModal, setShowDonutModal] = useState(false);
-  const [currentDeal, setCurrentDeal] = useState<{
-    type: string;
-    limit: number;
-    freeCount: number;
-    title: string;
-  } | null>(null);
   
   // Refs for scrolling to sections
   const breakfastRef = useRef<HTMLDivElement>(null);
@@ -667,54 +419,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const slowBarRef = useRef<HTMLDivElement>(null);
   const notCoffeeRef = useRef<HTMLDivElement>(null);
   const matchaRef = useRef<HTMLDivElement>(null);
-
-  // Donut data for the modal
-  const donutOptions = [
-    // Classic Donuts
-    { name: "Plain Chocolate", image: "/Classic/Plain Chocolate.png", category: "Classic", price: 150 },
-    { name: "Plain Glaze", image: "/Classic/Plain Glaze.png", category: "Classic", price: 150 },
-    { name: "Strawberry Sprinkle", image: "/Classic/Strawberry Sprinkle.png", category: "Classic", price: 150 },
-    
-    // Delights Donuts
-    { name: "After Eight", image: "/Delights/After Eight.png", category: "Delights", price: 240 },
-    { name: "Coconut Truffle", image: "/Delights/Coconut Truffle.png", category: "Delights", price: 240 },
-    { name: "Cookies and Cream", image: "/Delights/Cookies and Cream.png", category: "Delights", price: 240 },
-    { name: "Ferrero Rocher", image: "/Delights/Ferrero Rocher.png", category: "Delights", price: 240 },
-    { name: "Nutella Bon", image: "/Delights/Nutella Bon.png", category: "Delights", price: 240 },
-    { name: "Oreo Chocolate", image: "/Delights/Oreo Chocolate.png", category: "Delights", price: 240 },
-    { name: "Salted Caramel", image: "/Delights/Salted Caramel.png", category: "Delights", price: 240 },
-    
-    // Premium Donuts
-    { name: "Bagelish", image: "/Premium/Bagelish.png", category: "Premium", price: 300 },
-    { name: "Bavarian Cream", image: "/Premium/Bavarian Cream.png", category: "Premium", price: 300 },
-    { name: "Benoffee", image: "/Premium/benoffee.png", category: "Premium", price: 300 },
-    { name: "Blueberry Cream Cheese", image: "/Premium/Blueberry Cream Cheese.png", category: "Premium", price: 300 },
-    { name: "Choco Fudge", image: "/Premium/Choco Fudge.png", category: "Premium", price: 300 },
-    { name: "Chocolate Malt", image: "/Premium/Chocolate Malt.png", category: "Premium", price: 300 },
-    { name: "Hazelnutty", image: "/Premium/Hazelnutty.png", category: "Premium", price: 300 },
-    { name: "Jammie", image: "/Premium/Jammie.png", category: "Premium", price: 300 },
-    { name: "Jelly Donut", image: "/Premium/Jelly Donut.png", category: "Premium", price: 300 },
-    { name: "Kinder Bueno", image: "/Premium/Kinder Bueno.png", category: "Premium", price: 300 },
-    { name: "Lemon Curd", image: "/Premium/Lemon Curd.png", category: "Premium", price: 300 },
-    { name: "Lotus", image: "/Premium/Lotus.png", category: "Premium", price: 300 },
-    { name: "Peanut Caramel", image: "/Premium/Peanut Caramel.png", category: "Premium", price: 300 },
-    { name: "Pistachio Delight", image: "/Premium/Pistachio Delight.png", category: "Premium", price: 300 },
-    { name: "Rabri", image: "/Premium/Rabri.png", category: "Premium", price: 300 },
-    { name: "Red Velvet", image: "/Premium/Red velvet Donut.png", category: "Premium", price: 300 }
-  ];
-
-  // State for selected donuts and total - now deal-specific
-  const [dealSelections, setDealSelections] = useState<{
-    [dealKey: string]: {
-      selectedDonuts: {[key: string]: number};
-      totalAmount: number;
-      freeDonutsSelected: string[];
-    }
-  }>({});
-  const [showFreeDonutModal, setShowFreeDonutModal] = useState(false);
-  const [dragStartY, setDragStartY] = useState(0);
-  const [dragOffset, setDragOffset] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
 
   // Scroll-based active tab detection
   const [scrollActiveTab, setScrollActiveTab] = useState("Breakfast");
@@ -734,6 +438,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [orderNotes, setOrderNotes] = useState(() => {
     return localStorage.getItem(`orderNotes_${userId}`) || "";
   });
+
   const [showSplitOptions, setShowSplitOptions] = useState(false);
   const [showPaymentMethod, setShowPaymentMethod] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'easypaisa' | 'jazzcash' | null>(null);
@@ -753,37 +458,382 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [shareCartInput, setShareCartInput] = useState('');
   const [showJoinRequest, setShowJoinRequest] = useState(false);
   const [joinRequestData, setJoinRequestData] = useState<{fromUserId: string, fromUserName: string} | null>(null);
-  const [notification, setNotification] = useState<{type: 'success' | 'error', message: string} | null>(null);
+  const [, setNotification] = useState<{type: 'success' | 'error' | 'info', message: string, title?: string} | null>(null);
   const [isCollaborativeSession, setIsCollaborativeSession] = useState(false);
   const [collaborativeUserId, setCollaborativeUserId] = useState<string | null>(null);
   const [isSessionLocked, setIsSessionLocked] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastOrder, setLastOrder] = useState<StoredOrder | null>(() => {
-    const savedOrder = localStorage.getItem(`lastOrder_${userId}`);
-    if (!savedOrder) return null;
-    try {
-      return JSON.parse(savedOrder);
-    } catch {
-      return null;
-    }
-  });
+  const [lastOrder, setLastOrder] = useState<StoredOrder | null>(() => getStoredOrderForCurrentTable());
   const [showOrderTracker, setShowOrderTracker] = useState(() => {
-    return Boolean(localStorage.getItem(`lastOrder_${userId}`));
+    return Boolean(getStoredOrderForCurrentTable());
   });
-  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [showAuthDrawer, setShowAuthDrawer] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authOtp, setAuthOtp] = useState("");
+  const [authStep, setAuthStep] = useState<"credentials" | "verify-signup">("credentials");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [isPasswordRecoveryMode, setIsPasswordRecoveryMode] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [isMenuAuthenticated, setIsMenuAuthenticated] = useState(
+    () => localStorage.getItem(MENU_AUTH_KEY) === "true",
+  );
   const [showPastOrdersModal, setShowPastOrdersModal] = useState(false);
-  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const [showSidebarMenu, setShowSidebarMenu] = useState(false);
+  const [showFirstVisitPromo, setShowFirstVisitPromo] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    const today = getLocalDateStamp();
+    const seenOn = localStorage.getItem(DAILY_PROMO_SEEN_KEY);
+    const shouldShow = seenOn !== today;
+    if (shouldShow) {
+      localStorage.setItem(DAILY_PROMO_SEEN_KEY, today);
+    }
+    return shouldShow;
+  });
+  const [promoSlideIndex, setPromoSlideIndex] = useState(0);
+  const [displayName, setDisplayName] = useState(() => {
+    const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
+    return storedName?.trim() || `User ${userId}`;
+  });
+  const [displayNameDraft, setDisplayNameDraft] = useState(() => {
+    const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
+    return storedName?.trim() || `User ${userId}`;
+  });
+  const [remoteCatalog, setRemoteCatalog] =
+    useState<MenuCatalogApiResponse | null>(null);
+  const [tableAccess, setTableAccess] = useState<{
+    tableNumber: number;
+    tableLabel: string;
+    tableStatus: string;
+    hasQrCode: boolean;
+    orderingEnabled: boolean;
+    message: string;
+  } | null>(null);
+  const [showWaiterBanner, setShowWaiterBanner] = useState(false);
+  const [waiterBannerProgress, setWaiterBannerProgress] = useState(100);
+  const lastOrderRef = useRef<StoredOrder | null>(lastOrder);
+  const waiterBannerIntervalRef = useRef<number | null>(null);
+  const waiterBannerTimeoutRef = useRef<number | null>(null);
+  const pendingJoinTimeoutRef = useRef<number | null>(null);
 
-  const handleCallWaiter = () => {
-    setNotification({
-      type: "success",
-      message: "A waiter has been notified.",
+  const remoteItemsByCategory = useMemo(() => {
+    const map = new Map<string, MenuItemData[]>();
+    for (const item of remoteCatalog?.items ?? []) {
+      const key = item.categorySlug.toLowerCase();
+      if (!OFFERED_MENU_CATEGORY_SLUGS.has(key)) {
+        continue;
+      }
+      const allowedItemNames = OFFERED_MENU_ITEM_NAME_LOOKUP.get(key);
+      if (allowedItemNames && !allowedItemNames.has(item.name.toLowerCase())) {
+        continue;
+      }
+      const current = map.get(key) ?? [];
+      current.push(mapCatalogItemToMenuItemData(item));
+      map.set(key, current);
+    }
+    map.forEach((values, key) => {
+      values.sort((a: MenuItemData, b: MenuItemData) =>
+        a.name.localeCompare(b.name),
+      );
+      map.set(key, values);
     });
-    setTimeout(() => setNotification(null), 3000);
+    return map;
+  }, [remoteCatalog]);
+
+  const BREAKFAST_SOURCE = remoteItemsByCategory.get("breakfast") ?? [];
+  const SALAD_SOURCE = remoteItemsByCategory.get("salads") ?? [];
+  const SANDWICH_SOURCE = remoteItemsByCategory.get("sandwiches") ?? [];
+  const COFFEE_SOURCE = remoteItemsByCategory.get("coffee") ?? [];
+  const SLOW_BAR_SOURCE = remoteItemsByCategory.get("slow-bar") ?? [];
+  const NOT_COFFEE_SOURCE = remoteItemsByCategory.get("not-coffee") ?? [];
+  const MATCHA_SOURCE = remoteItemsByCategory.get("matcha") ?? [];
+
+  useEffect(() => {
+    lastOrderRef.current = lastOrder;
+  }, [lastOrder]);
+
+  useEffect(() => {
+    return () => {
+      if (waiterBannerIntervalRef.current !== null) {
+        window.clearInterval(waiterBannerIntervalRef.current);
+      }
+      if (waiterBannerTimeoutRef.current !== null) {
+        window.clearTimeout(waiterBannerTimeoutRef.current);
+      }
+      if (pendingJoinTimeoutRef.current !== null) {
+        window.clearTimeout(pendingJoinTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    let inFlight = false;
+
+    const syncCatalog = async (force = false) => {
+      if (!isMounted || inFlight) return;
+      if (!force && typeof document !== "undefined" && document.hidden) return;
+      inFlight = true;
+      try {
+        const catalog = await fetchMenuCatalog();
+        if (!isMounted) return;
+        setRemoteCatalog(catalog);
+      } catch (error) {
+        if (!isMounted) return;
+        console.warn("Menu catalog sync failed:", error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void syncCatalog(true);
+    const timer = window.setInterval(() => {
+      void syncCatalog(false);
+    }, 10000);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void syncCatalog(true);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const supabaseClient = supabaseBrowser;
+    const channel = supabaseClient
+      ? supabaseClient
+          .channel("menu-catalog-realtime")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "menu_items" },
+            () => {
+              void syncCatalog(true);
+            },
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "menu_option_groups" },
+            () => {
+              void syncCatalog(true);
+            },
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "menu_option_values" },
+            () => {
+              void syncCatalog(true);
+            },
+          )
+          .subscribe()
+      : null;
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (channel && supabaseClient) {
+        void supabaseClient.removeChannel(channel);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    let inFlight = false;
+
+    const syncTableAccess = async (force = false) => {
+      if (!isMounted || inFlight) return;
+      if (!force && typeof document !== "undefined" && document.hidden) return;
+      inFlight = true;
+      try {
+        const access = await fetchTablePublicAccess(tableNumberNumeric);
+        if (!isMounted) return;
+        setTableAccess(access);
+      } catch (error) {
+        if (!isMounted) return;
+        console.warn("Table access sync failed:", error);
+        setTableAccess({
+          tableNumber: tableNumberNumeric,
+          tableLabel: `Table${tableNumberNumeric}`,
+          tableStatus: "unknown",
+          hasQrCode: false,
+          orderingEnabled: false,
+          message: "Unable to verify this table right now.",
+        });
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void syncTableAccess(true);
+    const timer = window.setInterval(() => {
+      void syncTableAccess(false);
+    }, 12000);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void syncTableAccess(true);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const supabaseClient = supabaseBrowser;
+    const channel = supabaseClient
+      ? supabaseClient
+          .channel(`table-access-${tableNumberNumeric}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "restaurant_tables",
+              filter: `table_number=eq.${tableNumberNumeric}`,
+            },
+            () => {
+              void syncTableAccess(true);
+            },
+          )
+          .subscribe()
+      : null;
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (channel && supabaseClient) {
+        void supabaseClient.removeChannel(channel);
+      }
+    };
+  }, [tableNumberNumeric]);
+
+  useEffect(() => {
+    if (!tableAccess?.orderingEnabled) return;
+    void checkInTableFromQrApi(tableNumberNumeric).catch((error) => {
+      console.warn("Table check-in failed:", error);
+    });
+  }, [tableAccess?.orderingEnabled, tableNumberNumeric]);
+
+  const ensureOrderingEnabled = () => {
+    if (tableAccess?.orderingEnabled) return true;
+    window.alert(
+      tableAccess?.message ||
+        "This table cannot be used to place an order right now.",
+    );
+    return false;
+  };
+
+  const showCustomerWaiterBanner = () => {
+    if (waiterBannerIntervalRef.current !== null) {
+      window.clearInterval(waiterBannerIntervalRef.current);
+      waiterBannerIntervalRef.current = null;
+    }
+    if (waiterBannerTimeoutRef.current !== null) {
+      window.clearTimeout(waiterBannerTimeoutRef.current);
+      waiterBannerTimeoutRef.current = null;
+    }
+
+    const durationMs = 6000;
+    const startedAt = Date.now();
+    setWaiterBannerProgress(100);
+    setShowWaiterBanner(true);
+
+    waiterBannerIntervalRef.current = window.setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const nextProgress = Math.max(0, 100 - (elapsed / durationMs) * 100);
+      setWaiterBannerProgress(nextProgress);
+    }, 100);
+
+    waiterBannerTimeoutRef.current = window.setTimeout(() => {
+      if (waiterBannerIntervalRef.current !== null) {
+        window.clearInterval(waiterBannerIntervalRef.current);
+        waiterBannerIntervalRef.current = null;
+      }
+      setWaiterBannerProgress(0);
+      setShowWaiterBanner(false);
+      waiterBannerTimeoutRef.current = null;
+    }, durationMs);
+  };
+
+  const handleCallWaiter = async () => {
+    if (!ensureOrderingEnabled()) return;
+
+    try {
+      await callWaiterApi({
+        tableNumber: tableNumberNumeric,
+        tableLabel: `Table ${tableNumberNumeric}`,
+      });
+      showCustomerWaiterBanner();
+    } catch (error) {
+      console.warn("Call waiter failed:", error);
+      window.alert("Unable to call waiter right now. Please try again.");
+    }
   };
 
   const dismissActiveOrder = () => {
     setShowOrderTracker(false);
+  };
+
+  // Order status update system
+  const updateOrderStatus = (
+    newStatus: StoredOrder['status'],
+    message: string,
+    targetOrderNumber?: string,
+  ) => {
+    const currentOrder = lastOrderRef.current;
+    if (!currentOrder) return;
+    if (targetOrderNumber && currentOrder.orderNumber !== targetOrderNumber) return;
+    if (currentOrder.status === "served") return;
+
+    const statusRank: Record<StoredOrder["status"], number> = {
+      placed: 0,
+      confirmed: 1,
+      preparing: 2,
+      served: 3,
+    };
+
+    if (statusRank[newStatus] <= statusRank[currentOrder.status]) return;
+
+    const updatedOrder: StoredOrder = {
+      ...currentOrder,
+      status: newStatus,
+      statusHistory: [
+        ...currentOrder.statusHistory,
+        {
+          status: newStatus,
+          timestamp: Date.now(),
+          message,
+        },
+      ],
+    };
+
+    lastOrderRef.current = updatedOrder;
+    setLastOrder(updatedOrder);
+    if (newStatus === "served") {
+      localStorage.removeItem(getStoredOrderKey());
+      setShowOrderTracker(false);
+    } else {
+      localStorage.setItem(getStoredOrderKey(), JSON.stringify(updatedOrder));
+    }
+
+    // Show notification
+    setNotification({
+      type: 'info',
+      title: 'Order Update',
+      message,
+    });
+    setTimeout(() => setNotification(null), 5000);
+  };
+
+  const getOrderStatusMessage = (status: StoredOrder["status"]) => {
+    if (status === "confirmed") return "Your order has been confirmed!";
+    if (status === "preparing") return "Your order is being prepared!";
+    if (status === "served") return "Your order has been served. Enjoy your meal!";
+    return "Order placed successfully.";
   };
 
   const handleLogout = () => {
@@ -848,22 +898,64 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   
   // Cart state with user tracking - using unique keys for each user's items
   const [cart, setCart] = useState<Record<string, CartItem>>(() => {
-    console.log('Initializing cart state for userId:', userId);
     const savedCart = localStorage.getItem(`cart_${userId}`);
-    console.log('Initial saved cart from localStorage:', savedCart);
     if (savedCart) {
       try {
-        const parsedCart = JSON.parse(savedCart);
-        console.log('Initial parsed cart:', parsedCart);
-        return parsedCart;
+        return JSON.parse(savedCart);
       } catch (error) {
         console.error('Error parsing saved cart:', error);
         return {};
       }
     }
-    console.log('No initial cart found, starting with empty cart');
     return {};
   });
+
+  const unavailableMenuItemIds = useMemo(
+    () =>
+      new Set(
+        (remoteCatalog?.items ?? [])
+          .filter((item) => !item.isAvailable)
+          .map((item) => item.id),
+      ),
+    [remoteCatalog],
+  );
+
+  const unavailableItemBaseNames = useMemo(
+    () =>
+      new Set(
+        (remoteCatalog?.items ?? [])
+          .filter((item) => !item.isAvailable)
+          .map((item) => normalizeItemBaseName(item.name)),
+      ),
+    [remoteCatalog],
+  );
+
+  const isMenuItemOutOfStock = (menuItemId?: string, itemName?: string) => {
+    if (menuItemId && unavailableMenuItemIds.has(menuItemId)) {
+      return true;
+    }
+    if (!itemName) {
+      return false;
+    }
+    return unavailableItemBaseNames.has(normalizeItemBaseName(itemName));
+  };
+
+  const isCartItemOutOfStock = (item: CartItem) => {
+    return isMenuItemOutOfStock(item.menuItemId, item.baseItemName || item.name);
+  };
+
+  const hasOutOfStockItemsInCart = useMemo(
+    () => Object.values(cart).some((item) => isCartItemOutOfStock(item)),
+    [cart, unavailableMenuItemIds, unavailableItemBaseNames],
+  );
+
+  const ensureCartHasNoOutOfStockItems = () => {
+    if (!hasOutOfStockItemsInCart) return true;
+    window.alert(
+      "One or more items in your cart are now out of stock. Remove them before checkout.",
+    );
+    return false;
+  };
   
   // Get user-specific keys
   const getCartKey = () => `cart_${userId}`;
@@ -922,28 +1014,46 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       return;
     }
     
-    const requestData = {
+    const requestData: JoinRequest = {
       fromUserId: userId,
-      fromUserName: `User ${userId}`,
+      fromUserName: displayName,
       targetUserId: targetUserId,
       timestamp: Date.now()
     };
     
     // Store the join request in localStorage for the target user
-    const existingRequests = JSON.parse(localStorage.getItem('joinRequests') || '[]');
+    const existingRequests = JSON.parse(
+      localStorage.getItem('joinRequests') || '[]',
+    ) as JoinRequest[];
     existingRequests.push(requestData);
     localStorage.setItem('joinRequests', JSON.stringify(existingRequests));
     
-    console.log('Stored join request:', requestData);
-    console.log('All join requests:', existingRequests);
-    
     // Store a pending request for the sender (not a full session yet)
-    const pendingRequest = {
+    const pendingRequest: PendingJoinRequest = {
       targetUserId: targetUserId,
       timestamp: Date.now(),
       status: 'pending'
     };
     localStorage.setItem(`pendingJoinRequest_${userId}`, JSON.stringify(pendingRequest));
+    if (pendingJoinTimeoutRef.current !== null) {
+      window.clearTimeout(pendingJoinTimeoutRef.current);
+    }
+    pendingJoinTimeoutRef.current = window.setTimeout(() => {
+      const pendingRaw = localStorage.getItem(`pendingJoinRequest_${userId}`);
+      if (!pendingRaw) return;
+      try {
+        const pendingData = JSON.parse(pendingRaw) as PendingJoinRequest;
+        if (pendingData.targetUserId !== targetUserId) return;
+        localStorage.removeItem(`pendingJoinRequest_${userId}`);
+        setNotification({
+          type: 'error',
+          message: `Join request to User ${pendingData.targetUserId} timed out`
+        });
+        setTimeout(() => setNotification(null), 3000);
+      } catch {
+        localStorage.removeItem(`pendingJoinRequest_${userId}`);
+      }
+    }, 30000);
     
     // Show success notification
     setNotification({
@@ -951,17 +1061,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       message: `Join request sent to User ${targetUserId}. Waiting for response...`
     });
     setTimeout(() => setNotification(null), 3000);
-    
-    console.log('Join request sent to:', targetUserId);
   };
 
   const checkForJoinRequests = () => {
-    const requests = JSON.parse(localStorage.getItem('joinRequests') || '[]');
-    console.log('Checking for join requests. Current userId:', userId);
-    console.log('All join requests:', requests);
+    const requests = JSON.parse(
+      localStorage.getItem('joinRequests') || '[]',
+    ) as JoinRequest[];
     
-    const pendingRequest = requests.find((req: any) => req.targetUserId === userId);
-    console.log('Found pending request:', pendingRequest);
+    const pendingRequest = requests.find((req) => req.targetUserId === userId);
     
     if (pendingRequest) {
       setJoinRequestData({
@@ -971,9 +1078,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       setShowJoinRequest(true);
       
       // Remove the processed request
-      const updatedRequests = requests.filter((req: any) => req.targetUserId !== userId);
+      const updatedRequests = requests.filter((req) => req.targetUserId !== userId);
       localStorage.setItem('joinRequests', JSON.stringify(updatedRequests));
-      console.log('Processed join request, remaining requests:', updatedRequests);
     }
   };
 
@@ -981,8 +1087,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const response = localStorage.getItem(`joinRequestResponse_${userId}`);
     if (response) {
       try {
-        const responseData = JSON.parse(response);
-        console.log('Received join request response:', responseData);
+        const responseData = JSON.parse(response) as JoinRequestResponse;
         
         if (responseData.status === 'accepted') {
           // The target user accepted our request, set up collaborative session
@@ -1002,35 +1107,17 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           });
           setTimeout(() => setNotification(null), 3000);
         }
+        localStorage.removeItem(`pendingJoinRequest_${userId}`);
+        if (pendingJoinTimeoutRef.current !== null) {
+          window.clearTimeout(pendingJoinTimeoutRef.current);
+          pendingJoinTimeoutRef.current = null;
+        }
         
         // Clear the response
         localStorage.removeItem(`joinRequestResponse_${userId}`);
       } catch (error) {
         console.error('Error processing join request response:', error);
         localStorage.removeItem(`joinRequestResponse_${userId}`);
-      }
-    }
-    
-    // Check for expired pending requests (older than 30 seconds)
-    const pendingRequest = localStorage.getItem(`pendingJoinRequest_${userId}`);
-    if (pendingRequest) {
-      try {
-        const pendingData = JSON.parse(pendingRequest);
-        const timeSinceRequest = Date.now() - pendingData.timestamp;
-        
-        if (timeSinceRequest > 30000) { // 30 seconds timeout
-          console.log('Pending join request expired');
-          localStorage.removeItem(`pendingJoinRequest_${userId}`);
-          
-          setNotification({
-            type: 'error',
-            message: `Join request to User ${pendingData.targetUserId} timed out`
-          });
-          setTimeout(() => setNotification(null), 3000);
-        }
-      } catch (error) {
-        console.error('Error processing pending request:', error);
-        localStorage.removeItem(`pendingJoinRequest_${userId}`);
       }
     }
   };
@@ -1191,7 +1278,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     setIsSessionLocked(false);
     setIsSyncing(false);
 
-    console.log('Exited collaborative session, kept only my items');
   };
 
   // Check if current user can modify an item
@@ -1238,7 +1324,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const handleTabClick = (tab: string) => {
     setActiveTab(tab);
-    
+    setScrollActiveTab(tab); // Sync the scroll active tab state
+
     // Scroll to the corresponding section
     const refs = {
       "Breakfast": breakfastRef,
@@ -1249,125 +1336,16 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       "Not Coffee": notCoffeeRef,
       "Matcha": matchaRef,
     };
-    
+
     const targetRef = refs[tab as keyof typeof refs];
     if (targetRef?.current) {
       // Simple scroll to element with offset
-      const yOffset = -100; // Offset for sticky header
+      const yOffset = -120; // Offset for sticky header
       const element = targetRef.current;
       const y = element.getBoundingClientRect().top + window.pageYOffset + yOffset;
-      
+
       window.scrollTo({top: y, behavior: 'smooth'});
     }
-  };
-
-  // Helper functions for cart management
-  const getCurrentDealKey = () => {
-    return currentDeal ? `${currentDeal.type}-${currentDeal.limit}-${currentDeal.freeCount}` : '';
-  };
-
-  const getCurrentDealSelection = () => {
-    const dealKey = getCurrentDealKey();
-    return dealSelections[dealKey] || {
-      selectedDonuts: {},
-      totalAmount: 0,
-      freeDonutsSelected: []
-    };
-  };
-
-  const addToCart = (donutName: string, price: number) => {
-    const dealKey = getCurrentDealKey();
-    if (!dealKey) return;
-
-    setDealSelections(prev => {
-      const currentSelection = prev[dealKey] || {
-        selectedDonuts: {},
-        totalAmount: 0,
-        freeDonutsSelected: []
-      };
-      
-      const currentTotal = Object.values(currentSelection.selectedDonuts).reduce((sum: number, count: number) => sum + count, 0);
-      const limit = currentDeal?.limit || 7;
-      
-      if (currentTotal >= limit) {
-        return prev; // Don't add more than the limit
-      }
-      
-      const newSelectedDonuts = { 
-        ...currentSelection.selectedDonuts, 
-        [donutName]: (currentSelection.selectedDonuts[donutName] || 0) + 1 
-      };
-      
-      const newTotal = updateTotalForSelection(newSelectedDonuts);
-      
-      return {
-        ...prev,
-        [dealKey]: {
-          ...currentSelection,
-          selectedDonuts: newSelectedDonuts,
-          totalAmount: newTotal
-        }
-      };
-    });
-  };
-
-  const removeFromCart = (donutName: string, price: number) => {
-    const dealKey = getCurrentDealKey();
-    if (!dealKey) return;
-
-    setDealSelections(prev => {
-      const currentSelection = prev[dealKey] || {
-        selectedDonuts: {},
-        totalAmount: 0,
-        freeDonutsSelected: []
-      };
-      
-      const currentCount = currentSelection.selectedDonuts[donutName] || 0;
-      let newSelectedDonuts = { ...currentSelection.selectedDonuts };
-      
-      if (currentCount <= 1) {
-        delete newSelectedDonuts[donutName];
-      } else {
-        newSelectedDonuts[donutName] = currentCount - 1;
-      }
-      
-      const newTotal = updateTotalForSelection(newSelectedDonuts);
-      
-      return {
-        ...prev,
-        [dealKey]: {
-          ...currentSelection,
-          selectedDonuts: newSelectedDonuts,
-          totalAmount: newTotal
-        }
-      };
-    });
-  };
-
-  const updateTotalForSelection = (selected: {[key: string]: number}) => {
-    let total = 0;
-    Object.keys(selected).forEach(donutName => {
-      const donut = donutOptions.find(d => d.name === donutName);
-      if (donut) {
-        total += donut.price * selected[donutName];
-      }
-    });
-    return total;
-  };
-
-  const getTotalSelectedCount = () => {
-    const currentSelection = getCurrentDealSelection();
-    return Object.values(currentSelection.selectedDonuts).reduce((sum: number, count: number) => sum + count, 0);
-  };
-
-  const getCurrentTotalAmount = () => {
-    const currentSelection = getCurrentDealSelection();
-    return currentSelection.totalAmount;
-  };
-
-  const getCurrentFreeDonuts = () => {
-    const currentSelection = getCurrentDealSelection();
-    return currentSelection.freeDonutsSelected;
   };
 
   const getSelectedAddOnTotal = (item: MenuItemData, addOns: string[] = []) => {
@@ -1403,7 +1381,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return resolvePrice(item.name, item.price);
   };
 
-  const isOrderableItem = (item: MenuItemData) => getBaseItemPrice(item, item.temperatureOptions?.[0] ?? null) > 0;
+  const isOrderableItem = (item: MenuItemData) =>
+    item.isAvailable !== false &&
+    getBaseItemPrice(item, item.temperatureOptions?.[0] ?? null) > 0;
 
   const getItemPriceLabel = (item: MenuItemData, temperature?: string | null) => {
     if (temperature) {
@@ -1420,7 +1400,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         return null;
       }
 
-      const uniquePrices = [...new Set(priceEntries.map((entry) => entry.price))];
+      const uniquePrices = Array.from(new Set(priceEntries.map((entry) => entry.price)));
       if (uniquePrices.length === 1) {
         return `Rs.${uniquePrices[0].toLocaleString()}/-`;
       }
@@ -1488,27 +1468,26 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return details.length ? `${item.description || ""} ${details.join(" | ")}`.trim() : item.description;
   };
 
-  const setCurrentFreeDonuts = (freeDonuts: string[]) => {
-    const dealKey = getCurrentDealKey();
-    if (!dealKey) return;
-
-    setDealSelections(prev => ({
-      ...prev,
-      [dealKey]: {
-        ...getCurrentDealSelection(),
-        freeDonutsSelected: freeDonuts
-      }
-    }));
-  };
-
   // Cart functions
-  const addItemToCart = (itemName: string, price: number, image?: string, details?: string) => {
-    if (isSessionLocked) {
-      console.log('Session is locked, cannot add items');
+  const addItemToCart = (
+    itemName: string,
+    price: number,
+    image?: string,
+    details?: string,
+    meta?: { menuItemId?: string; baseItemName?: string },
+  ) => {
+    if (!ensureOrderingEnabled()) {
       return;
     }
 
-    console.log('Adding item to cart:', { itemName, price, image, details });
+    if (isMenuItemOutOfStock(meta?.menuItemId, meta?.baseItemName || itemName)) {
+      window.alert(`${itemName} is currently out of stock.`);
+      return;
+    }
+
+    if (isSessionLocked) {
+      return;
+    }
 
     setCart(prev => {
       // Create unique key for this user's item
@@ -1522,10 +1501,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           quantity: (prev[uniqueKey]?.quantity || 0) + 1,
           image: image,
           details: details,
-          addedBy: userId
+          addedBy: userId,
+          menuItemId: meta?.menuItemId ?? prev[uniqueKey]?.menuItemId,
+          baseItemName: meta?.baseItemName ?? prev[uniqueKey]?.baseItemName,
         }
       };
-      console.log('New cart item:', newCart[uniqueKey]);
       localStorage.setItem(getCartKey(), JSON.stringify(newCart));
       
       // If in collaborative session, sync with other user immediately
@@ -1546,13 +1526,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const removeItemFromCart = (itemKey: string) => {
     if (isSessionLocked) {
-      console.log('Session is locked, cannot remove items');
       return;
     }
 
     // Check if user can modify this item
     if (!canModifyItem(itemKey)) {
-      console.log('Cannot modify item added by another user');
       return;
     }
 
@@ -1598,10 +1576,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const resolvePrice = (name: string, fallback?: number) => {
     const numericFallback = typeof fallback === "number" ? fallback : 0;
-    const key = name.toLowerCase();
-    const mapped = PRICE_MAP[key];
-    if (mapped) return mapped;
     if (numericFallback > 0) return numericFallback;
+    const key = name.toLowerCase();
     const suggested = SUGGESTED_ITEMS.find(item => item.name.toLowerCase() === key);
     return suggested?.price ?? 0;
   };
@@ -1666,92 +1642,73 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return Object.values(customAmounts).reduce((sum, amount) => sum + amount, 0);
   };
 
-  // Drag handlers for modal
-  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    setDragStartY(clientY);
-    setIsDragging(true);
-    setDragOffset(0);
-  };
-
-  const handleDragMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDragging) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const offset = clientY - dragStartY;
-    if (offset > 0) {
-      setDragOffset(offset);
-    }
-  };
-
-  const handleDragEnd = () => {
-    if (dragOffset > 50) {
-      // Close modal if dragged down more than 50px (easier threshold)
-      setShowDonutModal(false);
-      setShowFreeDonutModal(false);
-      setDragOffset(0);
-    }
-    setIsDragging(false);
-    setDragOffset(0);
-  };
-
-  // Scroll-based active tab detection
+  // Auto-scroll active tab into view when it changes
   useEffect(() => {
-    let ticking = false;
-    
-    const handleScroll = () => {
-      if (!ticking) {
-        requestAnimationFrame(() => {
-          const scrollPosition = window.scrollY + 200; // Offset for sticky header
-          
-          // Show sticky header after scrolling past hero
-          setShowStickyHeader(window.scrollY > 200);
-          
-          const sections = [
-            { name: "Breakfast", ref: breakfastRef },
-            { name: "Salads", ref: saladsRef },
-            { name: "Sandwiches", ref: sandwichesRef },
-            { name: "Coffee", ref: coffeeRef },
-            { name: "Slow Bar", ref: slowBarRef },
-            { name: "Not Coffee", ref: notCoffeeRef },
-            { name: "Matcha", ref: matchaRef },
-          ];
+    const scrollActiveTabIntoView = () => {
+      // Small delay to ensure DOM is updated
+      setTimeout(() => {
+        const activeTabElement = document.querySelector(`[data-tab="${scrollActiveTab}"]`);
+        if (activeTabElement) {
+          activeTabElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'center'
+          });
+        }
+      }, 50);
+    };
 
-          for (let i = sections.length - 1; i >= 0; i--) {
-            const section = sections[i];
-            if (section.ref.current) {
-              const element = section.ref.current;
-              const elementTop = element.offsetTop;
-              const elementBottom = elementTop + element.offsetHeight;
-              
-              if (scrollPosition >= elementTop && scrollPosition < elementBottom) {
-                setScrollActiveTab(section.name);
-                // Auto-scroll the sticky menu to show the active tab
-                setTimeout(() => {
-                  const activeTabElement = document.querySelector(`[data-tab="${section.name}"]`);
-                  if (activeTabElement) {
-                    activeTabElement.scrollIntoView({
-                      behavior: 'smooth',
-                      block: 'nearest',
-                      inline: 'center'
-                    });
-                  }
-                }, 100);
-                break;
-              }
-            }
-          }
-          ticking = false;
-        });
-        ticking = true;
-      }
+    scrollActiveTabIntoView();
+  }, [scrollActiveTab]);
+
+  // Handle sticky header visibility
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowStickyHeader(window.scrollY > 200);
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Scroll-based active tab detection using IntersectionObserver
+  useEffect(() => {
+    const observerOptions = {
+      root: null,
+      rootMargin: '-100px 0px -50% 0px', // Trigger when section is 100px from top and 50% visible
+      threshold: 0
+    };
+
+    const observerCallback = (entries: IntersectionObserverEntry[]) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const sectionId = entry.target.id;
+          setScrollActiveTab(sectionId);
+        }
+      });
+    };
+
+    const observer = new IntersectionObserver(observerCallback, observerOptions);
+
+    // Observe all sections
+    const sections = [
+      { id: "Breakfast", ref: breakfastRef },
+      { id: "Salads", ref: saladsRef },
+      { id: "Sandwiches", ref: sandwichesRef },
+      { id: "Coffee", ref: coffeeRef },
+      { id: "Slow Bar", ref: slowBarRef },
+      { id: "Not Coffee", ref: notCoffeeRef },
+      { id: "Matcha", ref: matchaRef },
+    ];
+
+    sections.forEach(({ id, ref }) => {
+      if (ref.current) {
+        ref.current.id = id; // Set id for intersection observer
+        observer.observe(ref.current);
+      }
+    });
+
+    return () => observer.disconnect();
   }, []);
 
   const openItemDetailFromCard = (cardEl: HTMLDivElement) => {
@@ -1772,6 +1729,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   };
 
   const openItemDetailFromData = (item: MenuItemData) => {
+    if (isMenuItemOutOfStock(item.menuItemId, item.name)) {
+      window.alert(`${item.name} is currently out of stock.`);
+      return;
+    }
     if (!isOrderableItem(item)) return;
     const defaultTemperature = item.temperatureOptions?.[0] ?? null;
     const price = getBaseItemPrice(item, defaultTemperature);
@@ -1800,6 +1761,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const handleAddSelectedItem = () => {
     if (!selectedItem) return;
+    if (!ensureOrderingEnabled()) return;
+    if (isMenuItemOutOfStock(selectedItem.menuItemId, selectedItem.name)) {
+      window.alert(`${selectedItem.name} is currently out of stock.`);
+      return;
+    }
     const cartName = getSelectedCartName(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
     const itemPrice = getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
     const itemDetails = getSelectedItemDetails(selectedItem, selectedEggType, selectedTemperature, selectedAddOns);
@@ -1807,7 +1773,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const diff = itemQuantity - currentQty;
     if (diff > 0) {
       for (let i = 0; i < diff; i++) {
-        addItemToCart(cartName, itemPrice, selectedItem.image, itemDetails);
+        addItemToCart(cartName, itemPrice, selectedItem.image, itemDetails, {
+          menuItemId: selectedItem.menuItemId,
+          baseItemName: selectedItem.name,
+        });
       }
     } else if (diff < 0) {
       for (let i = 0; i < Math.abs(diff); i++) {
@@ -1815,21 +1784,38 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       }
     }
 
-    selectedSuggestedItems.forEach((itemName) => {
+    const unavailableSuggestedItems = selectedSuggestedItems.filter((itemName) =>
+      isMenuItemOutOfStock(undefined, itemName),
+    );
+    if (unavailableSuggestedItems.length > 0) {
+      window.alert(
+        `These suggested items are out of stock and were not added: ${unavailableSuggestedItems.join(", ")}`,
+      );
+    }
+
+    selectedSuggestedItems
+      .filter((itemName) => !isMenuItemOutOfStock(undefined, itemName))
+      .forEach((itemName) => {
       const suggestion = SUGGESTED_ITEMS.find((item) => item.name === itemName);
       if (!suggestion) return;
       addItemToCart(
         suggestion.name,
         resolvePrice(suggestion.name, suggestion.price),
-        suggestion.image,
+        undefined,
         "Frequently bought together",
+        { baseItemName: suggestion.name },
       );
-    });
+      });
 
     handleCloseItemModal();
   };
 
   const handleAddSuggestedItem = (item: MenuItemData) => {
+    if (!ensureOrderingEnabled()) return;
+    if (isMenuItemOutOfStock(item.menuItemId, item.name)) {
+      window.alert(`${item.name} is currently out of stock.`);
+      return;
+    }
     const price = getBaseItemPrice(item, item.temperatureOptions?.[0] ?? null);
     if (price <= 0) return;
     setSelectedSuggestedItems((prev) =>
@@ -1855,18 +1841,60 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   }, [orderNotes]);
 
   useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      if (!accountMenuRef.current?.contains(event.target as Node)) {
-        setShowAccountMenu(false);
-      }
-    };
+    const pushSetupMessage = sessionStorage.getItem("pushSetupMessage");
+    if (!pushSetupMessage) return;
 
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
+    setNotification({
+      type: "info",
+      title: "Notifications",
+      message: pushSetupMessage,
+    });
+    sessionStorage.removeItem("pushSetupMessage");
+    setTimeout(() => setNotification(null), 5000);
   }, []);
 
+  const closeFirstVisitPromo = () => {
+    setShowFirstVisitPromo(false);
+  };
+
+  const handleAddToHomeScreen = async () => {
+    if (typeof window === "undefined") {
+      closeFirstVisitPromo();
+      return;
+    }
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "TableTap",
+          text: "Save TableTap to your Home Screen",
+          url: window.location.href,
+        });
+      } else {
+        setNotification({
+          type: "success",
+          title: "Add to Home Screen",
+          message: "Use your browser Share menu and choose 'Add to Home Screen'.",
+        });
+        setTimeout(() => setNotification(null), 5000);
+      }
+    } catch {
+      // User cancelled the share sheet or share failed.
+    } finally {
+      closeFirstVisitPromo();
+    }
+  };
+
+  const goToNextPromoSlide = () => {
+    setPromoSlideIndex((current) => (current + 1) % PROMO_SLIDES.length);
+  };
+
+  const goToPreviousPromoSlide = () => {
+    setPromoSlideIndex((current) => (current - 1 + PROMO_SLIDES.length) % PROMO_SLIDES.length);
+  };
+
   useEffect(() => {
-    if (showItemModal || showCart) {
+    if (showItemModal || showCart || showSidebarMenu || showAuthDrawer) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = '';
@@ -1874,25 +1902,274 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return () => {
       document.body.style.overflow = '';
     };
-  }, [showItemModal, showCart]);
+  }, [showItemModal, showCart, showSidebarMenu, showAuthDrawer]);
+
+  useEffect(() => {
+    if (showAuthDrawer) {
+      setDisplayNameDraft(displayName);
+    }
+  }, [showAuthDrawer, displayName]);
+
+  useEffect(() => {
+    if (!supabaseBrowser) {
+      return;
+    }
+
+    let mounted = true;
+    supabaseBrowser.auth.getSession().then(({ data }) => {
+      if (!mounted) {
+        return;
+      }
+      const session = data.session;
+      const isAuthenticated = Boolean(session);
+      setIsMenuAuthenticated(isAuthenticated);
+      if (isAuthenticated) {
+        localStorage.setItem(MENU_AUTH_KEY, "true");
+      } else {
+        localStorage.removeItem(MENU_AUTH_KEY);
+      }
+      const email = session?.user?.email ?? "";
+      if (email) {
+        setAuthEmail(email);
+      }
+      const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
+      if (nameFromProfile) {
+        setDisplayName(nameFromProfile);
+        setDisplayNameDraft(nameFromProfile);
+        localStorage.setItem(DISPLAY_NAME_KEY, nameFromProfile);
+      }
+    });
+
+    const { data } = supabaseBrowser.auth.onAuthStateChange((event, session) => {
+      const isAuthenticated = Boolean(session);
+      setIsMenuAuthenticated(isAuthenticated);
+      if (isAuthenticated) {
+        localStorage.setItem(MENU_AUTH_KEY, "true");
+      } else {
+        localStorage.removeItem(MENU_AUTH_KEY);
+      }
+
+      const email = session?.user?.email ?? "";
+      if (email) {
+        setAuthEmail(email);
+      }
+      const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
+      if (nameFromProfile) {
+        setDisplayName(nameFromProfile);
+        setDisplayNameDraft(nameFromProfile);
+        localStorage.setItem(DISPLAY_NAME_KEY, nameFromProfile);
+      }
+
+      if (event === "PASSWORD_RECOVERY") {
+        setIsPasswordRecoveryMode(true);
+        setShowAuthDrawer(true);
+        setAuthError(null);
+        setAuthMessage("Set a new password for your account.");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
+  }, []);
+
+  const saveDisplayName = () => {
+    const normalizedName = displayNameDraft.trim().slice(0, 32);
+    const finalName = normalizedName || `User ${userId}`;
+    setDisplayName(finalName);
+    setDisplayNameDraft(finalName);
+    localStorage.setItem(DISPLAY_NAME_KEY, finalName);
+  };
+
+  const handleMenuSignOut = async () => {
+    if (supabaseBrowser) {
+      await supabaseBrowser.auth.signOut();
+    }
+    setIsMenuAuthenticated(false);
+    localStorage.removeItem(MENU_AUTH_KEY);
+  };
+
+  // Listen for order placed events from checkout
+  useEffect(() => {
+    const handleOrderPlaced = (event: CustomEvent<StoredOrder>) => {
+      const order = event.detail;
+      const orderTableNumber = getTableNumberFromLabel(order.tableLabel);
+      if (orderTableNumber !== tableNumber) {
+        return;
+      }
+      setLastOrder(order);
+      setShowOrderTracker(true);
+      localStorage.setItem(getStoredOrderKey(), JSON.stringify(order));
+
+      // Show initial order placed notification
+      setNotification({
+        type: 'success',
+        title: 'Order Placed!',
+        message: `Order #${order.orderNumber} has been placed successfully.`
+      });
+      setTimeout(() => setNotification(null), 5000);
+    };
+
+    window.addEventListener('orderPlaced', handleOrderPlaced as EventListener);
+    return () => window.removeEventListener('orderPlaced', handleOrderPlaced as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!lastOrder?.orderNumber || !supabaseBrowser) {
+      return;
+    }
+    const supabaseClient = supabaseBrowser;
+
+    const channel = supabaseClient
+      .channel(`order-tracker-${lastOrder.orderNumber}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `order_number=eq.${lastOrder.orderNumber}`,
+        },
+        (payload) => {
+          const nextStatusRaw = String(payload.new?.status ?? "placed");
+          const nextStatus: StoredOrder["status"] =
+            nextStatusRaw === "confirmed" || nextStatusRaw === "accepted"
+              ? "confirmed"
+              : nextStatusRaw === "preparing" || nextStatusRaw === "ready"
+                ? "preparing"
+                : nextStatusRaw === "served" || nextStatusRaw === "completed"
+                  ? "served"
+                  : "placed";
+
+          updateOrderStatus(
+            nextStatus,
+            getOrderStatusMessage(nextStatus),
+            lastOrder.orderNumber,
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabaseClient.removeChannel(channel);
+    };
+  }, [lastOrder?.orderNumber]);
+
+  useEffect(() => {
+    if (!lastOrder?.orderNumber || lastOrder.status === "served") {
+      return;
+    }
+
+    let cancelled = false;
+    const orderNumber = lastOrder.orderNumber;
+
+    const syncOrderStatus = async () => {
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
+      try {
+        const response = await fetchOrderStatus(orderNumber);
+        const nextStatus = response.order.status;
+        if (!cancelled) {
+          updateOrderStatus(nextStatus, getOrderStatusMessage(nextStatus), orderNumber);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Order tracker poll fallback failed:", error);
+        }
+      }
+    };
+
+    void syncOrderStatus();
+    const interval = window.setInterval(() => {
+      void syncOrderStatus();
+    }, 9000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [lastOrder?.orderNumber, lastOrder?.status]);
 
   const getSuggestedItems = (currentName: string) => {
     const filtered = SUGGESTED_ITEMS.filter(item => item.name.toLowerCase() !== currentName.toLowerCase());
     return (filtered.length ? filtered : SUGGESTED_ITEMS).slice(0, 2);
   };
 
-  // Check for join requests and responses periodically
+  const processCartSyncEvent = () => {
+    const syncEvent = localStorage.getItem(`cart_sync_${userId}`);
+    if (!syncEvent) return;
+    try {
+      const syncData = JSON.parse(syncEvent) as {
+        timestamp?: number;
+        cart?: Record<string, CartItem>;
+        sessionStart?: boolean;
+        fromUserId?: string;
+      };
+      const currentTime = Date.now();
+      if (currentTime - Number(syncData.timestamp ?? 0) < 5000) {
+        if (syncData.sessionStart) {
+          setIsCollaborativeSession(true);
+          setCollaborativeUserId(syncData.fromUserId || '');
+        }
+        setIsSyncing(true);
+        setCart(syncData.cart ?? {});
+        setTimeout(() => setIsSyncing(false), 1000);
+      }
+      localStorage.removeItem(`cart_sync_${userId}`);
+    } catch (error) {
+      console.error('Error processing cart sync:', error);
+      localStorage.removeItem(`cart_sync_${userId}`);
+    }
+  };
+
   useEffect(() => {
-    const checkRequests = () => {
-      checkForJoinRequests();
-      checkForJoinRequestResponses();
+    checkForJoinRequests();
+    checkForJoinRequestResponses();
+    processCartSyncEvent();
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === 'joinRequests') {
+        checkForJoinRequests();
+      }
+      if (event.key === `joinRequestResponse_${userId}`) {
+        checkForJoinRequestResponses();
+      }
+      if (event.key === `cart_sync_${userId}`) {
+        processCartSyncEvent();
+      }
+      if (event.key === `collaborativeSession_${userId}`) {
+        const raw = localStorage.getItem(`collaborativeSession_${userId}`);
+        if (!raw) return;
+        try {
+          const session = JSON.parse(raw) as {
+            userId1?: string;
+            userId2?: string;
+            isActive?: boolean;
+            isLocked?: boolean;
+          };
+          if (!session.isActive) {
+            setIsCollaborativeSession(false);
+            setCollaborativeUserId(null);
+            setIsSessionLocked(false);
+            return;
+          }
+          setIsCollaborativeSession(true);
+          const otherUserId =
+            session.userId1 === userId ? session.userId2 : session.userId1;
+          setCollaborativeUserId(otherUserId || null);
+          setIsSessionLocked(Boolean(session.isLocked));
+        } catch (error) {
+          console.error('Error processing collaborative session update:', error);
+        }
+      }
     };
 
-    // Check immediately and then every 2 seconds
-    checkRequests();
-    const interval = setInterval(checkRequests, 2000);
-
-    return () => clearInterval(interval);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
   }, [userId]);
 
   // Load collaborative session state from localStorage
@@ -1912,20 +2189,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   // Ensure cart is loaded from localStorage on component mount and userId change
   useEffect(() => {
-    console.log('Cart loading useEffect triggered, userId:', userId);
     const savedCart = localStorage.getItem(`cart_${userId}`);
-    console.log('Saved cart from localStorage:', savedCart);
     if (savedCart) {
       try {
         const parsedCart = JSON.parse(savedCart);
-        console.log('Parsed cart:', parsedCart);
         setCart(parsedCart);
-        console.log('Cart loaded from localStorage:', parsedCart);
       } catch (error) {
         console.error('Error loading cart from localStorage:', error);
       }
-    } else {
-      console.log('No saved cart found for userId:', userId);
     }
   }, [userId]);
 
@@ -1934,12 +2205,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         // Page became visible again, check for cart data
-        console.log('Page became visible, checking for cart data');
         const savedCart = localStorage.getItem(`cart_${userId}`);
         if (savedCart) {
           try {
             const parsedCart = JSON.parse(savedCart);
-            console.log('Cart loaded on visibility change:', parsedCart);
             setCart(parsedCart);
           } catch (error) {
             console.error('Error loading cart on visibility change:', error);
@@ -1954,30 +2223,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   // Save cart to localStorage whenever it changes
   useEffect(() => {
-    console.log('Cart saving useEffect triggered, cart:', cart);
     if (Object.keys(cart).length > 0) {
       localStorage.setItem(getCartKey(), JSON.stringify(cart));
-      console.log('Cart saved to localStorage:', cart);
-    } else {
-      console.log('Cart is empty, not saving to localStorage');
     }
   }, [cart]);
-
-  // Periodic cart validation for mobile browsers
-  useEffect(() => {
-    const checkCartIntegrity = () => {
-      // If we have items in state but nothing in localStorage, restore from localStorage
-      const savedCart = localStorage.getItem(`cart_${userId}`);
-      if (Object.keys(cart).length > 0 && !savedCart) {
-        console.log('Cart integrity check: state has items but localStorage is empty, saving to localStorage');
-        localStorage.setItem(getCartKey(), JSON.stringify(cart));
-      }
-    };
-
-    // Check every 5 seconds
-    const interval = setInterval(checkCartIntegrity, 5000);
-    return () => clearInterval(interval);
-  }, [cart, userId]);
 
   // Sync collaborative session state and cart periodically
   useEffect(() => {
@@ -2021,8 +2270,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         const heartbeat = JSON.parse(otherUserHeartbeat);
         const timeSinceHeartbeat = Date.now() - heartbeat.timestamp;
         
-        // If no heartbeat for more than 10 seconds, consider user disconnected
-        if (timeSinceHeartbeat > 10000) {
+        // If no heartbeat for more than 20 seconds, consider user disconnected
+        if (timeSinceHeartbeat > 20000) {
           // End the session
           const sessionData = localStorage.getItem(`collaborativeSession_${userId}`);
           if (sessionData) {
@@ -2062,54 +2311,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
     // Sync immediately and then every 3 seconds
     syncSession();
-    const interval = setInterval(syncSession, 3000);
+    const interval = setInterval(syncSession, 6000);
 
     return () => clearInterval(interval);
     }, [isCollaborativeSession, collaborativeUserId, userId]);
 
 
-
-  // Real-time cart sync for collaborative sessions
-  useEffect(() => {
-    const checkForCartChanges = () => {
-      // Check for sync events from the other user
-      const syncEvent = localStorage.getItem(`cart_sync_${userId}`);
-      if (syncEvent) {
-        try {
-          const syncData = JSON.parse(syncEvent);
-          const currentTime = Date.now();
-          
-          // Only process recent sync events (within last 5 seconds)
-          if (currentTime - syncData.timestamp < 5000) {
-            // Handle session start event
-            if (syncData.sessionStart) {
-              setIsCollaborativeSession(true);
-              setCollaborativeUserId(syncData.fromUserId || '');
-              console.log('Session started via sync');
-            }
-            
-            setIsSyncing(true);
-            setCart(syncData.cart);
-            console.log('Real-time cart sync received');
-            
-            // Hide syncing indicator after a short delay
-            setTimeout(() => setIsSyncing(false), 1000);
-          }
-          
-          // Clear the sync event after processing
-          localStorage.removeItem(`cart_sync_${userId}`);
-        } catch (error) {
-          console.error('Error processing cart sync:', error);
-          localStorage.removeItem(`cart_sync_${userId}`);
-        }
-      }
-    };
-
-    // Check for cart changes more frequently (every 500ms for real-time feel)
-    const interval = setInterval(checkForCartChanges, 500);
-
-    return () => clearInterval(interval);
-  }, [userId]);
 
   // Heartbeat system to track user activity
   useEffect(() => {
@@ -2121,9 +2328,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       localStorage.setItem(`heartbeat_${userId}`, JSON.stringify(heartbeat));
     };
 
-    // Update heartbeat every 2 seconds
+    // Update heartbeat every 5 seconds
     updateHeartbeat();
-    const heartbeatInterval = setInterval(updateHeartbeat, 2000);
+    const heartbeatInterval = setInterval(updateHeartbeat, 5000);
 
     return () => clearInterval(heartbeatInterval);
   }, [userId]);
@@ -2153,7 +2360,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const handleVisibilityChange = () => {
       // Save cart when page becomes hidden (mobile browser behavior)
       if (document.hidden && Object.keys(cart).length > 0) {
-        console.log('Page hidden, saving cart to localStorage');
         localStorage.setItem(getCartKey(), JSON.stringify(cart));
       }
     };
@@ -2161,7 +2367,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const handlePageHide = () => {
       // Save cart when page is hidden (mobile browser behavior)
       if (Object.keys(cart).length > 0) {
-        console.log('Page hide event, saving cart to localStorage');
         localStorage.setItem(getCartKey(), JSON.stringify(cart));
       }
     };
@@ -2177,66 +2382,259 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     };
   }, [isCollaborativeSession, collaborativeUserId, cart]);
 
-  const cartListScrollable = Object.keys(cart).length > 2;
-  const renderAccountMenu = (avatarSizeClass: string) => (
-    <div ref={accountMenuRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setShowAccountMenu((value) => !value)}
-        className="rounded-full transition-transform hover:scale-[1.02]"
-      >
-        <img
-          src="/Avatar.avif"
-          alt="User avatar"
-          className={`${avatarSizeClass} rounded-full object-cover border border-gray-200 shadow-sm`}
-        />
-      </button>
+  const openAuthDrawer = (mode: "login" | "signup") => {
+    setAuthMode(mode);
+    setAuthStep("credentials");
+    setIsPasswordRecoveryMode(false);
+    setAuthOtp("");
+    setAuthError(null);
+    setAuthMessage(null);
+    setShowAuthDrawer(true);
+  };
 
-      {showAccountMenu && (
-        <div className="absolute right-0 top-full z-50 mt-3 w-64 overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-xl">
-          <div className="border-b border-gray-100 px-4 py-4">
-            <p className="text-sm font-semibold text-gray-900 heading-font">Signed in</p>
-            <p className="mt-1 text-xs text-gray-500 subtext-font">User ID {userId}</p>
-          </div>
+  const closeAuthDrawer = () => {
+    setShowAuthDrawer(false);
+    setAuthPassword("");
+    setAuthOtp("");
+    setAuthStep("credentials");
+    setAuthError(null);
+    setAuthMessage(null);
+    setIsPasswordRecoveryMode(false);
+    setNewPassword("");
+    setConfirmNewPassword("");
+  };
 
+  const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!supabaseBrowser) {
+      setAuthError("Supabase auth is not configured yet.");
+      return;
+    }
+
+    setAuthLoading(true);
+    setAuthError(null);
+    setAuthMessage(null);
+
+    try {
+      if (isPasswordRecoveryMode) {
+        const nextPassword = newPassword.trim();
+        if (!nextPassword || nextPassword.length < 6) {
+          setAuthError("Password must be at least 6 characters.");
+          return;
+        }
+        if (nextPassword !== confirmNewPassword.trim()) {
+          setAuthError("Passwords do not match.");
+          return;
+        }
+        const { error } = await supabaseBrowser.auth.updateUser({
+          password: nextPassword,
+        });
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+        setAuthMessage("Password updated. You can now log in.");
+        setIsPasswordRecoveryMode(false);
+        setAuthMode("login");
+        setNewPassword("");
+        setConfirmNewPassword("");
+        return;
+      }
+
+      if (authMode === "signup" && authStep === "verify-signup") {
+        const token = authOtp.trim();
+        if (!token) {
+          setAuthError("Enter the OTP code sent to your email.");
+          return;
+        }
+        const { error } = await supabaseBrowser.auth.verifyOtp({
+          email: authEmail.trim(),
+          token,
+          type: "signup",
+        });
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+        saveDisplayName();
+        setIsMenuAuthenticated(true);
+        localStorage.setItem(MENU_AUTH_KEY, "true");
+        closeAuthDrawer();
+        return;
+      }
+
+      if (authMode === "signup") {
+        const nameValue = displayNameDraft.trim().slice(0, 32);
+        const { data, error } = await supabaseBrowser.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+          options: {
+            data: {
+              display_name: nameValue || `User ${userId}`,
+            },
+            emailRedirectTo: `${window.location.origin}/menu`,
+          },
+        });
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+        if (data.session) {
+          saveDisplayName();
+          setIsMenuAuthenticated(true);
+          localStorage.setItem(MENU_AUTH_KEY, "true");
+          closeAuthDrawer();
+          return;
+        }
+        setAuthStep("verify-signup");
+        setAuthMessage(
+          "A verification code/email has been sent. Enter OTP below, or use the email link."
+        );
+        return;
+      }
+
+      const { data, error } = await supabaseBrowser.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword,
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+      if (data.session) {
+        setIsMenuAuthenticated(true);
+        localStorage.setItem(MENU_AUTH_KEY, "true");
+        closeAuthDrawer();
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleGoogleAuth = async () => {
+    if (!supabaseBrowser) {
+      setAuthError("Supabase auth is not configured yet.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const { error } = await supabaseBrowser.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/menu`,
+        },
+      });
+      if (error) {
+        setAuthError(error.message);
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!supabaseBrowser) {
+      setAuthError("Supabase auth is not configured yet.");
+      return;
+    }
+    const email = authEmail.trim();
+    if (!email) {
+      setAuthError("Enter your email first.");
+      return;
+    }
+    setAuthLoading(true);
+    setAuthError(null);
+    setAuthMessage(null);
+    try {
+      const { error } = await supabaseBrowser.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/menu`,
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+      setAuthMessage("Password reset email sent. Check your inbox.");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const renderAuthControls = (compact = false) => {
+    if (!isMenuAuthenticated) {
+      return (
+        <button
+          type="button"
+          onClick={() => openAuthDrawer("login")}
+          className={`rounded-full bg-black text-white transition-colors hover:bg-gray-900 heading-font ${
+            compact ? "px-3 py-1.5 text-xs" : "px-4 py-2 text-sm"
+          }`}
+        >
+          Sign Up / Log in
+        </button>
+      );
+    }
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <button
             type="button"
-            onClick={() => {
-              setShowPastOrdersModal(true);
-              setShowAccountMenu(false);
-            }}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+            className="rounded-full border border-gray-200 bg-white p-0.5 transition-colors hover:bg-gray-50"
+            aria-label="Open account menu"
           >
-            <ClipboardList size={17} />
+            <Avatar className={compact ? "h-8 w-8" : "h-10 w-10"}>
+              <AvatarImage src="/Avatar.avif" alt={`${displayName} avatar`} />
+              <AvatarFallback className="overflow-hidden">
+                <img src="/Avatar.avif" alt="Avatar icon" className="h-full w-full object-cover" />
+              </AvatarFallback>
+            </Avatar>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={8} className="w-56 rounded-xl">
+          <DropdownMenuLabel className="py-2">
+            <p className="text-sm font-semibold text-gray-900 heading-font">{displayName}</p>
+            <p className="text-xs text-gray-500 subtext-font">Signed in</p>
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => setShowPastOrdersModal(true)}
+            className="cursor-pointer"
+          >
+            <ClipboardList size={16} />
             <span className="heading-font">View past order</span>
-          </button>
-
+          </DropdownMenuItem>
           {lastOrder ? (
-            <button
-              type="button"
-              onClick={() => {
-                setShowOrderTracker(true);
-                setShowAccountMenu(false);
-              }}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+            <DropdownMenuItem
+              onClick={() => setShowOrderTracker(true)}
+              className="cursor-pointer"
             >
-              <BellRing size={17} />
+              <BellRing size={16} />
               <span className="heading-font">Track current order</span>
-            </button>
+            </DropdownMenuItem>
           ) : null}
-
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex w-full items-center gap-3 border-t border-gray-100 px-4 py-3 text-left text-sm text-red-600 transition-colors hover:bg-red-50"
+          <DropdownMenuItem
+            onClick={() =>
+              window.open("mailto:support@tabletap.app?subject=TableTap%20Support", "_blank")
+            }
+            className="cursor-pointer"
           >
-            <LogOut size={17} />
-            <span className="heading-font">Log out</span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
+            <LifeBuoy size={16} />
+            <span className="heading-font">Support</span>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={handleMenuSignOut}
+            className="cursor-pointer text-red-600 focus:text-red-600"
+          >
+            <LogOut size={16} />
+            <span className="heading-font">Sign out</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
 
   return (
     <motion.div
@@ -2246,40 +2644,569 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       transition={{ duration: 0.4 }}
       className="bg-[#faf9f6] pb-safe pb-2"
     >
-      <style>{`
-        .menu-image-surface {
-          background-color: ${BRAND_PRIMARY};
-        }
+      <AnimatePresence>
+        {showWaiterBanner ? (
+          <motion.div
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ duration: 0.2 }}
+            className="fixed left-4 right-4 top-24 z-[95]"
+          >
+            <Card className="overflow-hidden border-[#91bda6] bg-[#eaf4ef] shadow-xl">
+              <div className="px-4 py-3">
+                <p className="text-sm font-semibold text-gray-900 heading-font">
+                  Waiter called
+                </p>
+                <p className="mt-1 text-xs text-gray-700 subtext-font">
+                  A waiter has been notified for your table.
+                </p>
+              </div>
+              <div className="h-1 w-full bg-[#d6e7de]">
+                <div
+                  className="h-full bg-[#91bda6] transition-[width] duration-100"
+                  style={{ width: `${waiterBannerProgress}%` }}
+                />
+              </div>
+            </Card>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
-        .item-image {
-          background-color: ${BRAND_PRIMARY};
-        }
-      `}</style>
+      <AnimatePresence>
+        {showFirstVisitPromo && (
+          <>
+            <motion.div
+              className="fixed inset-0 z-[70] bg-black/55"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeFirstVisitPromo}
+            />
+            <motion.div
+              className="fixed inset-0 z-[80] flex items-center justify-center p-4"
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="w-full max-w-md rounded-[30px] bg-white p-3 shadow-2xl">
+                <div className="relative overflow-hidden rounded-[26px]">
+                  <img
+                    src={PROMO_SLIDES[promoSlideIndex].image}
+                    alt={PROMO_SLIDES[promoSlideIndex].title}
+                    className="h-[280px] w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={closeFirstVisitPromo}
+                    className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-md"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-      {/* Notification Banner */}
-      {notification && (
-        <div className="fixed top-4 left-4 z-50 animate-in slide-in-from-left duration-300">
-          <div className={`px-4 py-3 rounded-lg shadow-lg ${
-            notification.type === 'success' 
-              ? 'bg-green-100 border border-green-300 text-green-800' 
-              : 'bg-red-100 border border-red-300 text-red-800'
-          }`}>
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full ${
-                notification.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-              }`}></div>
-              <span className="text-sm font-medium">{notification.message}</span>
-            </div>
-          </div>
-        </div>
-      )}
+                <div className="px-4 pb-3 pt-6 text-center">
+                  <h3 className="text-base font-semibold leading-[1.1] text-gray-900 heading-font">
+                    {PROMO_SLIDES[promoSlideIndex].title}
+                  </h3>
+                  <p className="mt-4 text-sm leading-relaxed text-gray-600 subtext-font">
+                    {PROMO_SLIDES[promoSlideIndex].description}
+                  </p>
+
+                  <Button
+                    type="button"
+                    onClick={handleAddToHomeScreen}
+                    className="mt-6 h-14 w-full rounded-2xl bg-black text-base font-semibold text-white heading-font hover:bg-gray-900"
+                  >
+                    {PROMO_SLIDES[promoSlideIndex].cta}
+                  </Button>
+
+                  <div className="mt-6 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={goToPreviousPromoSlide}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                    >
+                      <ChevronLeft size={24} />
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      {PROMO_SLIDES.map((_, index) => (
+                        <button
+                          key={`promo-dot-${index}`}
+                          type="button"
+                          onClick={() => setPromoSlideIndex(index)}
+                          className={`h-3 rounded-full transition-all ${
+                            promoSlideIndex === index
+                              ? "w-12 bg-gray-500"
+                              : "w-3 bg-gray-300"
+                          }`}
+                        />
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={goToNextPromoSlide}
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+                    >
+                      <ChevronLeft size={24} className="rotate-180" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showSidebarMenu && (
+          <>
+            <motion.button
+              type="button"
+              className="fixed inset-0 z-[55] bg-black/45"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSidebarMenu(false)}
+              aria-label="Close menu sidebar"
+            />
+            <motion.aside
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "spring", stiffness: 280, damping: 30 }}
+              className="fixed inset-y-0 left-0 z-[60] flex w-[84vw] max-w-sm flex-col bg-white shadow-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-gray-200 px-4 py-4">
+                <div>
+                  <p className="text-lg font-semibold text-gray-900 heading-font">Menu</p>
+                  <p className="text-xs text-gray-500 subtext-font">Hi, {displayName}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSidebarMenu(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100"
+                  aria-label="Close menu sidebar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="border-b border-gray-100 px-4 py-4">
+                <p className="text-sm font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
+                <p className="mt-1 text-xs text-gray-500 subtext-font">{RESTAURANT.address}</p>
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-3 py-3">
+                <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 subtext-font">
+                  Categories
+                </p>
+                <div className="mt-2 space-y-1">
+                  {tabs.map((tab) => {
+                    const isCurrent = activeTab === tab || scrollActiveTab === tab;
+                    return (
+                      <button
+                        key={`sidebar-tab-${tab}`}
+                        type="button"
+                        onClick={() => {
+                          handleTabClick(tab);
+                          setShowSidebarMenu(false);
+                        }}
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
+                          isCurrent
+                            ? "bg-black text-white heading-font"
+                            : "text-gray-700 hover:bg-gray-100 subtext-font"
+                        }`}
+                      >
+                        <span>{tab}</span>
+                        {isCurrent ? <Check size={14} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <p className="mt-6 px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 subtext-font">
+                  Quick Actions
+                </p>
+                <div className="mt-2 space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSidebarMenu(false);
+                      setShowCart(true);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    <ShoppingCart size={16} />
+                    <span className="heading-font">View cart ({getCartItemCount()})</span>
+                  </button>
+                  {isMenuAuthenticated ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSidebarMenu(false);
+                        setShowPastOrdersModal(true);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                    >
+                      <ClipboardList size={16} />
+                      <span className="heading-font">View past order</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSidebarMenu(false);
+                        openAuthDrawer("login");
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                    >
+                      <ClipboardList size={16} />
+                      <span className="heading-font">Log in / Sign up</span>
+                    </button>
+                  )}
+                  {lastOrder ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSidebarMenu(false);
+                        setShowOrderTracker(true);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                    >
+                      <BellRing size={16} />
+                      <span className="heading-font">Track current order</span>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSidebarMenu(false);
+                      window.open(
+                        "mailto:support@tabletap.app?subject=TableTap%20Support",
+                        "_blank"
+                      );
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                  >
+                    <LifeBuoy size={16} />
+                    <span className="heading-font">Support</span>
+                  </button>
+                </div>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showAuthDrawer && (
+          <>
+            <motion.button
+              type="button"
+              className="fixed inset-0 z-[70] bg-black/45"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeAuthDrawer}
+              aria-label="Close auth drawer"
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 250, damping: 28 }}
+              className={`fixed inset-x-0 bottom-0 z-[80] rounded-t-[30px] bg-white shadow-2xl ${
+                isPasswordRecoveryMode ? "h-[62vh]" : authMode === "signup" ? "h-[75vh]" : "h-[66vh]"
+              }`}
+            >
+              <div className="flex h-full flex-col p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xl font-semibold text-gray-900 heading-font">
+                      {isPasswordRecoveryMode
+                        ? "Reset password"
+                        : authMode === "signup"
+                          ? "Create account"
+                          : "Log in"}
+                    </p>
+                    <p className="mt-1 text-sm text-gray-500 subtext-font">
+                      {isPasswordRecoveryMode
+                        ? "Set a new password for your account."
+                        : authMode === "signup"
+                          ? "Sign up to save your details and track orders faster."
+                          : "Log in to access your account features."}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeAuthDrawer}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100"
+                    aria-label="Close auth drawer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {!isPasswordRecoveryMode ? (
+                  <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setAuthStep("credentials");
+                        setAuthError(null);
+                        setAuthMessage(null);
+                      }}
+                      className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                        authMode === "login"
+                          ? "bg-white text-gray-900 shadow-sm heading-font"
+                          : "text-gray-600 subtext-font"
+                      }`}
+                    >
+                      Log in
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setAuthStep("credentials");
+                        setAuthError(null);
+                        setAuthMessage(null);
+                      }}
+                      className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                        authMode === "signup"
+                          ? "bg-white text-gray-900 shadow-sm heading-font"
+                          : "text-gray-600 subtext-font"
+                      }`}
+                    >
+                      Sign up
+                    </button>
+                  </div>
+                ) : null}
+
+                <div className="mt-5 flex-1 overflow-y-auto pr-1 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+                  <form onSubmit={handleAuthSubmit} className="space-y-4">
+                    {!isPasswordRecoveryMode && authStep === "credentials" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleGoogleAuth}
+                          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-gray-300 bg-white px-4 py-3 text-sm font-semibold text-gray-800 transition-colors hover:bg-gray-50 heading-font disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={authLoading}
+                        >
+                          <span className="flex h-6 w-6 items-center justify-center rounded-full border border-gray-300 text-xs font-bold">
+                            G
+                          </span>
+                          {authMode === "signup" ? "Sign up with Google" : "Log in with Google"}
+                        </button>
+                        <div className="relative">
+                          <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-gray-200" />
+                          </div>
+                          <div className="relative flex justify-center">
+                            <span className="bg-white px-3 text-xs text-gray-400 subtext-font">
+                              or continue with email
+                            </span>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {authError ? (
+                      <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        {authError}
+                      </p>
+                    ) : null}
+                    {authMessage ? (
+                      <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                        {authMessage}
+                      </p>
+                    ) : null}
+
+                    {isPasswordRecoveryMode ? (
+                      <>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">New Password</label>
+                          <input
+                            type="password"
+                            value={newPassword}
+                            onChange={(event) => setNewPassword(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="At least 6 characters"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">Confirm Password</label>
+                          <input
+                            type="password"
+                            value={confirmNewPassword}
+                            onChange={(event) => setConfirmNewPassword(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="Re-enter your new password"
+                            required
+                          />
+                        </div>
+                      </>
+                    ) : authMode === "signup" && authStep === "verify-signup" ? (
+                      <>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">Email</label>
+                          <input
+                            type="email"
+                            value={authEmail}
+                            onChange={(event) => setAuthEmail(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="you@example.com"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">OTP Code</label>
+                          <input
+                            type="text"
+                            value={authOtp}
+                            onChange={(event) => setAuthOtp(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="Enter OTP from email"
+                            required
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {authMode === "signup" ? (
+                          <div>
+                            <label className="text-sm font-medium text-gray-700 subtext-font">Name</label>
+                            <input
+                              type="text"
+                              value={displayNameDraft}
+                              onChange={(event) => setDisplayNameDraft(event.target.value)}
+                              maxLength={32}
+                              className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                              placeholder="Enter your name"
+                            />
+                          </div>
+                        ) : null}
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">Email</label>
+                          <input
+                            type="email"
+                            value={authEmail}
+                            onChange={(event) => setAuthEmail(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="you@example.com"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">Password</label>
+                          <input
+                            type="password"
+                            value={authPassword}
+                            onChange={(event) => setAuthPassword(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="Enter password"
+                            required
+                          />
+                        </div>
+                        {authMode === "login" ? (
+                          <button
+                            type="button"
+                            onClick={handleForgotPassword}
+                            className="text-sm font-medium text-gray-700 underline-offset-4 transition-colors hover:text-black hover:underline subtext-font"
+                            disabled={authLoading}
+                          >
+                            Forgot password?
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+
+                    <button
+                      type="submit"
+                      className="w-full rounded-2xl bg-black px-4 py-3 text-base font-semibold text-white transition-colors hover:bg-gray-900 heading-font disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={authLoading}
+                    >
+                      {authLoading
+                        ? "Please wait..."
+                        : isPasswordRecoveryMode
+                          ? "Update password"
+                          : authMode === "signup" && authStep === "verify-signup"
+                            ? "Verify OTP"
+                            : authMode === "signup"
+                              ? "Sign up"
+                              : "Log in"}
+                    </button>
+                  </form>
+
+                  <div className="mt-6 border-t border-gray-200 pt-4">
+                    <p className="mb-2 text-xs uppercase tracking-wide text-gray-400 subtext-font">Quick actions</p>
+                    <div className="space-y-2">
+                      {isMenuAuthenticated ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowPastOrdersModal(true);
+                            closeAuthDrawer();
+                          }}
+                          className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+                        >
+                          <ClipboardList size={16} />
+                          <span className="heading-font">View past order</span>
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.open("mailto:support@tabletap.app?subject=TableTap%20Support", "_blank");
+                          closeAuthDrawer();
+                        }}
+                        className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+                      >
+                        <LifeBuoy size={16} />
+                        <span className="heading-font">Support</span>
+                      </button>
+                      {lastOrder ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowOrderTracker(true);
+                            closeAuthDrawer();
+                          }}
+                          className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
+                        >
+                          <BellRing size={16} />
+                          <span className="heading-font">Track current order</span>
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* Header */}
       <div
         className="bg-white px-4 py-0 flex items-center justify-between border-b border-b-gray-200"
         style={{ minHeight: "2rem" }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-0">
+          <button
+            type="button"
+            onClick={() => setShowSidebarMenu(true)}
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700"
+            aria-label="Open menu sidebar"
+          >
+            <MenuIcon size={18} />
+          </button>
           <img
             src="/TableTap.png"
             alt="Table Tap"
@@ -2288,7 +3215,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           />
         </div>
         <div className="flex items-center gap-2">
-          {renderAccountMenu("h-11 w-11")}
+          {renderAuthControls(false)}
         </div>
       </div>
 
@@ -2336,9 +3263,19 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       {showStickyHeader && (
         <div className="fixed top-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200 shadow-sm">
           <div className="px-4 py-2.5 flex items-center justify-between">
-            <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
             <div className="flex items-center gap-2">
-              {renderAccountMenu("h-10 w-10")}
+              <button
+                type="button"
+                onClick={() => setShowSidebarMenu(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700"
+                aria-label="Open menu sidebar"
+              >
+                <MenuIcon size={17} />
+              </button>
+              <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              {renderAuthControls(true)}
             </div>
           </div>
           <div className="px-4 pb-3">
@@ -2375,28 +3312,52 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 px-4 pb-[1.1rem] pt-3 backdrop-blur">
           <div className="rounded-3xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
             <div className="grid grid-cols-4 gap-2">
-              {[0, 1, 2, 3].map((step) => (
-                step === 0 ? (
+              {[0, 1, 2, 3].map((step) => {
+                const statusStepMap: Record<StoredOrder["status"], number> = {
+                  placed: 0,
+                  confirmed: 1,
+                  preparing: 2,
+                  served: 3,
+                };
+                const currentStep = statusStepMap[lastOrder.status];
+                const isCompletedStep = step < currentStep;
+                const isCurrentAnimatedStep = step === currentStep && lastOrder.status !== "served";
+                const isFilledStep = isCompletedStep || lastOrder.status === "served";
+
+                if (isCurrentAnimatedStep) {
+                  return (
+                    <div key={step} className="h-1.5 overflow-hidden rounded-full bg-gray-200">
+                      <motion.div
+                        className="h-full origin-left rounded-full bg-black"
+                        animate={{ scaleX: [0, 1, 1, 0] }}
+                        transition={{
+                          duration: 1.8,
+                          repeat: Infinity,
+                          ease: "linear",
+                          times: [0, 0.75, 0.9, 1],
+                        }}
+                      />
+                    </div>
+                  );
+                }
+
+                return isFilledStep ? (
                   <div key={step} className="h-1.5 overflow-hidden rounded-full bg-gray-200">
-                    <motion.div
-                      className="h-full origin-left rounded-full bg-black"
-                      animate={{ scaleX: [0, 1, 1, 0] }}
-                      transition={{
-                        duration: 1.8,
-                        repeat: Infinity,
-                        ease: "linear",
-                        times: [0, 0.75, 0.9, 1],
-                      }}
-                    />
+                    <div className="h-full rounded-full bg-black" />
                   </div>
                 ) : (
                   <div key={step} className="h-1.5 rounded-full bg-gray-200" />
-                )
-              ))}
+                );
+              })}
             </div>
             <div className="mt-3 flex items-start justify-between gap-3">
               <div>
-                <p className="text-base font-semibold text-gray-900 heading-font">Your order is being prepared</p>
+                <p className="text-base font-semibold text-gray-900 heading-font">
+                  {lastOrder.status === 'placed' && 'Order placed'}
+                  {lastOrder.status === 'confirmed' && 'Order confirmed'}
+                  {lastOrder.status === 'preparing' && 'Your order is being prepared'}
+                  {lastOrder.status === 'served' && 'Order served - Enjoy your meal!'}
+                </p>
                 <p className="mt-1 text-xs text-gray-500 subtext-font">
                   Order #{lastOrder.orderNumber} will be served to {lastOrder.tableLabel}.
                 </p>
@@ -2438,7 +3399,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           }`}
         >
           <button
-            onClick={() => setShowCart(true)}
+            onClick={() => {
+              if (!ensureOrderingEnabled()) return;
+              setShowCart(true);
+            }}
             className="w-full flex items-center justify-between rounded-full bg-black text-white px-5 py-3 shadow-lg transition-colors hover:bg-gray-900 heading-font"
           >
             <div className="flex flex-col items-start leading-tight">
@@ -2521,6 +3485,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 <p className="text-xs text-gray-500 mt-1">Average service time</p>
               </div>
             </div>
+            {tableAccess && !tableAccess.orderingEnabled ? (
+              <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {tableAccess.message}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -2551,23 +3520,32 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          <div ref={breakfastRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">BREAKFAST AT SIP.</h2>
            <div className="flex space-x-4 overflow-x-auto">
-             {BREAKFAST_ITEMS.map((item) => (
+             {BREAKFAST_SOURCE.map((item) => (
+               (() => {
+                 const unavailable = item.isAvailable === false;
+                 return (
                <div
                  key={item.name}
-                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-                 onClick={() => openItemDetailFromData(item)}
-               >
-                 <img
-                   src={item.image}
-                   alt={item.name}
-                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
-                 />
-                 <div className="p-3">
-                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
-                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
-                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
-                 </div>
+                 className={`relative bg-white rounded-lg shadow w-56 flex-shrink-0 transition-shadow ${
+                   unavailable
+                     ? "cursor-not-allowed opacity-65"
+                     : "cursor-pointer hover:shadow-lg"
+                 }`}
+                 onClick={() => !unavailable && openItemDetailFromData(item)}
+                >
+                  {unavailable ? (
+                    <div className="absolute right-2 top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                      Out of stock
+                    </div>
+                  ) : null}
+                  <div className="p-3">
+                    <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                    <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                    <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                  </div>
                </div>
+                 );
+               })()
              ))}
            </div>
          </div>
@@ -2576,23 +3554,32 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          <div ref={saladsRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SALADS.</h2>
            <div className="flex space-x-4 overflow-x-auto">
-             {SALAD_ITEMS.map((item) => (
+             {SALAD_SOURCE.map((item) => (
+               (() => {
+                 const unavailable = item.isAvailable === false;
+                 return (
                <div
                  key={item.name}
-                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-                 onClick={() => openItemDetailFromData(item)}
-               >
-                 <img
-                   src={item.image}
-                   alt={item.name}
-                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
-                 />
-                 <div className="p-3">
-                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
-                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
-                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
-                 </div>
+                 className={`relative bg-white rounded-lg shadow w-56 flex-shrink-0 transition-shadow ${
+                   unavailable
+                     ? "cursor-not-allowed opacity-65"
+                     : "cursor-pointer hover:shadow-lg"
+                 }`}
+                 onClick={() => !unavailable && openItemDetailFromData(item)}
+                >
+                  {unavailable ? (
+                    <div className="absolute right-2 top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                      Out of stock
+                    </div>
+                  ) : null}
+                  <div className="p-3">
+                    <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                    <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                    <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                  </div>
                </div>
+                 );
+               })()
              ))}
            </div>
          </div>
@@ -2601,23 +3588,32 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          <div ref={sandwichesRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SANDWICHES.</h2>
            <div className="flex space-x-4 overflow-x-auto">
-             {SANDWICH_ITEMS.map((item) => (
+             {SANDWICH_SOURCE.map((item) => (
+               (() => {
+                 const unavailable = item.isAvailable === false;
+                 return (
                <div
                  key={item.name}
-                 className="bg-white rounded-lg shadow w-56 flex-shrink-0 cursor-pointer hover:shadow-lg transition-shadow"
-                 onClick={() => openItemDetailFromData(item)}
-               >
-                 <img
-                   src={item.image}
-                   alt={item.name}
-                   className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
-                 />
-                 <div className="p-3">
-                   <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
-                   <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
-                   <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
-                 </div>
+                 className={`relative bg-white rounded-lg shadow w-56 flex-shrink-0 transition-shadow ${
+                   unavailable
+                     ? "cursor-not-allowed opacity-65"
+                     : "cursor-pointer hover:shadow-lg"
+                 }`}
+                 onClick={() => !unavailable && openItemDetailFromData(item)}
+                >
+                  {unavailable ? (
+                    <div className="absolute right-2 top-2 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                      Out of stock
+                    </div>
+                  ) : null}
+                  <div className="p-3">
+                    <div className="font-bold text-xs mb-1 item-title">{item.name}</div>
+                    <div className="text-xs text-gray-500 mb-2 item-description">{item.description}</div>
+                    <div className="font-bold text-sm item-price">Rs.{item.price}/-</div>
+                  </div>
                </div>
+                 );
+               })()
              ))}
            </div>
          </div>
@@ -2625,28 +3621,41 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          {/* Coffee Section */}
          <div ref={coffeeRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">COFFEE.</h2>
-           <div className="space-y-3">
-             {COFFEE_ITEMS.map((item) => {
+           <div className="space-y-2">
+             {COFFEE_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
+               const unavailable = item.isAvailable === false;
+
                return (
-                 <div
+                 <button
                    key={item.name}
-                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   type="button"
                    onClick={() => openItemDetailFromData(item)}
+                   disabled={unavailable}
+                   className={`w-full text-left transition ${
+                     unavailable ? "cursor-not-allowed opacity-60" : "hover:bg-gray-50"
+                   }`}
                  >
-                   <img
-                     src={item.image}
-                     alt={item.name}
-                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                   />
-                   <div className="flex flex-col flex-1 gap-1">
-                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
-                     <div className="text-sm text-gray-600 subtext-font line-clamp-1 item-description">{item.description}</div>
-                     {priceLabel ? (
-                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
-                     ) : null}
+                   <div className="flex w-full items-start justify-between gap-3 border-b border-gray-200 py-3">
+                     <div className="flex-1">
+                       <div className="text-base font-semibold text-gray-900 heading-font">{item.name}</div>
+                       <div className="text-sm text-gray-600 subtext-font line-clamp-2">{item.description}</div>
+                       {unavailable ? (
+                         <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                           Out of stock
+                         </div>
+                       ) : null}
+                       {priceLabel ? <div className="mt-1 text-sm font-bold text-gray-900">{priceLabel}</div> : null}
+                     </div>
+                     <div
+                       className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                         unavailable ? "bg-gray-300 text-gray-500" : "bg-black text-white"
+                       }`}
+                     >
+                       <Plus size={14} />
+                     </div>
                    </div>
-                 </div>
+                 </button>
                );
              })}
            </div>
@@ -2655,31 +3664,40 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          {/* Slow Bar Section */}
          <div ref={slowBarRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">SLOW BAR.</h2>
-           <div className="space-y-3">
-             {SLOW_BAR_ITEMS.map((item) => {
+           <div className="space-y-2">
+             {SLOW_BAR_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
-               const itemIsOrderable = isOrderableItem(item);
+               const unavailable = item.isAvailable === false;
                return (
-                 <div
+                 <button
                    key={item.name}
-                   className={`rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 ${
-                     itemIsOrderable ? "bg-white cursor-pointer" : "bg-gray-50 cursor-default"
-                   }`}
+                   type="button"
                    onClick={() => openItemDetailFromData(item)}
+                   disabled={unavailable}
+                   className={`w-full text-left transition ${
+                     unavailable ? "cursor-not-allowed opacity-60" : "hover:bg-gray-50"
+                   }`}
                  >
-                   <img
-                     src={item.image}
-                     alt={item.name}
-                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                   />
-                   <div className="flex flex-col flex-1 gap-1">
-                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
-                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
-                     {priceLabel ? (
-                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
-                     ) : null}
+                   <div className="flex w-full items-start justify-between gap-3 border-b border-gray-200 py-3">
+                     <div className="flex-1">
+                       <div className="text-base font-semibold text-gray-900 heading-font">{item.name}</div>
+                       <div className="text-sm text-gray-600 subtext-font line-clamp-2">{item.description}</div>
+                       {unavailable ? (
+                         <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                           Out of stock
+                         </div>
+                       ) : null}
+                       {priceLabel ? <div className="mt-1 text-sm font-bold text-gray-900">{priceLabel}</div> : null}
+                     </div>
+                     <div
+                       className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                         unavailable ? "bg-gray-300 text-gray-500" : "bg-black text-white"
+                       }`}
+                     >
+                       <Plus size={14} />
+                     </div>
                    </div>
-                 </div>
+                 </button>
                );
              })}
            </div>
@@ -2688,28 +3706,40 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          {/* Not Coffee Section */}
          <div ref={notCoffeeRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">NOT COFFEE.</h2>
-           <div className="space-y-3">
-             {NOT_COFFEE_ITEMS.map((item) => {
+           <div className="space-y-2">
+             {NOT_COFFEE_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
+               const unavailable = item.isAvailable === false;
                return (
-                 <div
+                 <button
                    key={item.name}
-                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   type="button"
                    onClick={() => openItemDetailFromData(item)}
+                   disabled={unavailable}
+                   className={`w-full text-left transition ${
+                     unavailable ? "cursor-not-allowed opacity-60" : "hover:bg-gray-50"
+                   }`}
                  >
-                   <img
-                     src={item.image}
-                     alt={item.name}
-                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                   />
-                   <div className="flex flex-col flex-1 gap-1">
-                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
-                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
-                     {priceLabel ? (
-                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
-                     ) : null}
+                   <div className="flex w-full items-start justify-between gap-3 border-b border-gray-200 py-3">
+                     <div className="flex-1">
+                       <div className="text-base font-semibold text-gray-900 heading-font">{item.name}</div>
+                       <div className="text-sm text-gray-600 subtext-font line-clamp-2">{item.description}</div>
+                       {unavailable ? (
+                         <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                           Out of stock
+                         </div>
+                       ) : null}
+                       {priceLabel ? <div className="mt-1 text-sm font-bold text-gray-900">{priceLabel}</div> : null}
+                     </div>
+                     <div
+                       className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                         unavailable ? "bg-gray-300 text-gray-500" : "bg-black text-white"
+                       }`}
+                     >
+                       <Plus size={14} />
+                     </div>
                    </div>
-                 </div>
+                 </button>
                );
              })}
            </div>
@@ -2718,28 +3748,40 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
          {/* Matcha Section */}
          <div ref={matchaRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">MATCHA.</h2>
-           <div className="space-y-3">
-             {MATCHA_ITEMS.map((item) => {
+           <div className="space-y-2">
+             {MATCHA_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
+               const unavailable = item.isAvailable === false;
                return (
-                 <div
+                 <button
                    key={item.name}
-                   className="rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-row-reverse items-start justify-between gap-4 p-4 bg-white cursor-pointer"
+                   type="button"
                    onClick={() => openItemDetailFromData(item)}
+                   disabled={unavailable}
+                   className={`w-full text-left transition ${
+                     unavailable ? "cursor-not-allowed opacity-60" : "hover:bg-gray-50"
+                   }`}
                  >
-                   <img
-                     src={item.image}
-                     alt={item.name}
-                     className="w-24 h-24 object-cover rounded-xl flex-shrink-0 item-image"
-                   />
-                   <div className="flex flex-col flex-1 gap-1">
-                     <div className="text-lg font-semibold text-gray-900 heading-font normal-case line-clamp-2 item-title">{item.name}</div>
-                     <div className="text-sm text-gray-600 subtext-font line-clamp-2 item-description">{item.description}</div>
-                     {priceLabel ? (
-                       <div className="mt-auto text-base font-semibold text-gray-900 heading-font item-price">{priceLabel}</div>
-                     ) : null}
+                   <div className="flex w-full items-start justify-between gap-3 border-b border-gray-200 py-3">
+                     <div className="flex-1">
+                       <div className="text-base font-semibold text-gray-900 heading-font">{item.name}</div>
+                       <div className="text-sm text-gray-600 subtext-font line-clamp-2">{item.description}</div>
+                       {unavailable ? (
+                         <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                           Out of stock
+                         </div>
+                       ) : null}
+                       {priceLabel ? <div className="mt-1 text-sm font-bold text-gray-900">{priceLabel}</div> : null}
+                     </div>
+                     <div
+                       className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                         unavailable ? "bg-gray-300 text-gray-500" : "bg-black text-white"
+                       }`}
+                     >
+                       <Plus size={14} />
+                     </div>
                    </div>
-                 </div>
+                 </button>
                );
              })}
            </div>
@@ -2763,37 +3805,37 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
               exit={{ y: "100%" }}
               transition={{ type: "spring", stiffness: 260, damping: 30 }}
             >
-              <div className="flex-1 overflow-y-auto">
-                <div className="relative">
-                  {selectedItem.image && (
-                    <img
-                      src={selectedItem.image}
-                      alt={selectedItem.name}
-                      className="menu-image-surface w-full h-56 object-cover"
-                    />
-                  )}
+              <div className="flex-1 overflow-y-auto pb-28">
+                <div className="relative h-16 bg-white">
                   <button
                     onClick={handleCloseItemModal}
-                    className="absolute top-4 left-4 z-10 w-10 h-10 rounded-full bg-white/90 shadow flex items-center justify-center"
+                    className="absolute left-4 top-4 h-12 w-12 rounded-full bg-white/95 shadow-md flex items-center justify-center"
                   >
-                    <X size={22} className="text-gray-800" />
+                    <X size={22} className="text-gray-700" />
                   </button>
                 </div>
-                <div className="p-5 space-y-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-2xl font-semibold text-gray-900 heading-font normal-case">
-                        {selectedItem.name}
-                      </p>
-                      <p className="text-lg font-semibold text-gray-900 heading-font mt-1">
-                        {getItemPriceLabel(selectedItem, selectedTemperature)}
-                      </p>
-                    </div>
-                  </div>
 
-                  {selectedItem.description && (
-                    <p className="text-sm text-gray-600 subtext-font">{selectedItem.description}</p>
-                  )}
+                <div className="px-5 pt-5">
+                  <p className="text-2xl font-semibold text-gray-900 heading-font normal-case">
+                    {selectedItem.name}
+                  </p>
+                  <p className="text-lg font-semibold text-gray-900 heading-font mt-1">
+                    {getItemPriceLabel(selectedItem, selectedTemperature)}
+                  </p>
+                </div>
+
+                {selectedItem.description && (
+                  <p className="mt-3 px-5 text-sm text-gray-600 leading-relaxed subtext-font">
+                    {selectedItem.description}
+                  </p>
+                )}
+                {isMenuItemOutOfStock(selectedItem.menuItemId, selectedItem.name) ? (
+                  <div className="mx-5 mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                    This item is currently out of stock.
+                  </div>
+                ) : null}
+
+                <div className="mt-5 space-y-4 px-5">
 
                   {selectedItem.eggOptions?.length ? (
                     <div className="space-y-3">
@@ -2871,24 +3913,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     </div>
                   ) : null}
 
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center rounded-full bg-gray-100 px-3 py-2">
-                      <button
-                        onClick={() => setItemQuantity((q) => Math.max(1, q - 1))}
-                        className="w-8 h-8 flex items-center justify-center text-gray-700"
-                      >
-                        <Minus size={18} />
-                      </button>
-                      <span className="mx-3 text-base font-semibold heading-font">{itemQuantity}</span>
-                      <button
-                        onClick={() => setItemQuantity((q) => q + 1)}
-                        className="w-8 h-8 flex items-center justify-center text-gray-700"
-                      >
-                        <Plus size={18} />
-                      </button>
-                    </div>
-                  </div>
-
                   <div className="pt-2 border-t">
                     <p className="text-lg font-semibold text-gray-900 heading-font mb-3">
                       Frequently bought together
@@ -2896,41 +3920,47 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     <div className="flex space-x-4 overflow-x-auto pb-1">
                       {getSuggestedItems(selectedItem.name).map(suggestion => {
                         const isSelected = selectedSuggestedItems.includes(suggestion.name);
+                        const unavailable = isMenuItemOutOfStock(undefined, suggestion.name);
                         return (
                           <div
                             key={suggestion.name}
-                            className={`relative rounded-lg shadow w-56 flex-shrink-0 cursor-pointer transition-all ${
+                            className={`relative rounded-lg shadow w-64 flex-shrink-0 cursor-pointer transition-all ${
                               isSelected
                                 ? "bg-black text-white shadow-lg"
-                                : "bg-white hover:shadow-lg"
+                                : unavailable
+                                  ? "bg-white opacity-65 cursor-not-allowed"
+                                  : "bg-white hover:shadow-lg"
                             }`}
                             onClick={() => handleAddSuggestedItem(suggestion)}
                           >
+                            {unavailable ? (
+                              <div className="absolute left-3 top-3 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                                Out of stock
+                              </div>
+                            ) : null}
                             <button
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
                                 handleAddSuggestedItem(suggestion);
                               }}
+                              disabled={unavailable}
                               className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full shadow ${
                                 isSelected
                                   ? "bg-white text-black"
-                                  : "bg-white/95 text-gray-900"
+                                  : unavailable
+                                    ? "bg-gray-200 text-gray-500"
+                                    : "bg-white/95 text-gray-900"
                               }`}
                             >
                               {isSelected ? <Check size={16} /> : <Plus size={16} />}
                             </button>
-                            <img
-                              src={suggestion.image}
-                              alt={suggestion.name}
-                              className="menu-image-surface w-full h-32 object-cover rounded-t-lg"
-                            />
-                            <div className="p-3">
+                            <div className="min-h-[150px] p-4">
                               <p className="font-bold text-xs mb-1 item-title">
                                 {suggestion.name}
                               </p>
                               <p
-                                className={`text-xs mb-2 item-description line-clamp-2 ${
+                                className={`text-xs mb-3 leading-relaxed item-description line-clamp-4 ${
                                   isSelected ? "text-white/75" : "text-gray-500"
                                 }`}
                               >
@@ -2948,307 +3978,38 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 </div>
               </div>
 
-              <div className="bg-white border-t p-4">
-                <button
-                  onClick={handleAddSelectedItem}
-                  className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
-                >
-                  Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
-                </button>
+              <div className="bg-white border-t p-4 fixed bottom-0 left-0 right-0 z-50">
+                <div className="flex gap-3">
+                  <div className="w-1/3 flex items-center justify-between rounded-xl bg-gray-100 px-3 py-2">
+                    <button
+                      onClick={() => setItemQuantity((q) => Math.max(1, q - 1))}
+                      className="w-8 h-8 flex items-center justify-center text-gray-700"
+                    >
+                      <Minus size={18} />
+                    </button>
+                    <span className="text-base font-semibold heading-font">{itemQuantity}</span>
+                    <button
+                      onClick={() => setItemQuantity((q) => q + 1)}
+                      className="w-8 h-8 flex items-center justify-center text-gray-700"
+                    >
+                      <Plus size={18} />
+                    </button>
+                  </div>
+                  <button
+                    onClick={handleAddSelectedItem}
+                    disabled={isMenuItemOutOfStock(selectedItem.menuItemId, selectedItem.name)}
+                    className={`w-2/3 py-3 rounded-xl text-base font-semibold heading-font ${
+                      isMenuItemOutOfStock(selectedItem.menuItemId, selectedItem.name)
+                        ? "cursor-not-allowed bg-gray-300 text-gray-500"
+                        : "bg-black text-white"
+                    }`}
+                  >
+                    Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
+                  </button>
+                </div>
               </div>
             </motion.div>
           </>
-        )}
-      </AnimatePresence>
-
-      {/* Donut Selection Modal */}
-      <AnimatePresence>
-        {showDonutModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end"
-            onClick={() => setShowDonutModal(false)}
-          >
-            <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: dragOffset }}
-              exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="bg-white rounded-t-3xl w-full max-h-[80vh] overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-              style={{ transform: `translateY(${dragOffset}px)` }}
-            >
-              {/* Drag Indicator */}
-              <div className="flex justify-center pt-2 pb-1">
-                <div className="w-12 h-1 bg-gray-300 rounded-full"></div>
-              </div>
-              
-              {/* Modal Header */}
-              <div 
-                className="flex items-center justify-between p-4 border-b cursor-grab active:cursor-grabbing"
-                onMouseDown={handleDragStart}
-                onMouseMove={handleDragMove}
-                onMouseUp={handleDragEnd}
-                onMouseLeave={handleDragEnd}
-                onTouchStart={handleDragStart}
-                onTouchMove={handleDragMove}
-                onTouchEnd={handleDragEnd}
-              >
-                <h2 className="text-xl font-bold">{currentDeal?.title || "Select Your Donuts"}</h2>
-                <button
-                  onClick={() => setShowDonutModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-4 max-h-[55vh] overflow-y-auto pb-20">
-                <div className="mb-4">
-                  <p className="text-sm text-gray-600 mb-4">
-                    {currentDeal?.freeCount ? 
-                      `Choose exactly ${currentDeal.limit} donuts and get ${currentDeal.freeCount} classic donut${currentDeal.freeCount > 1 ? 's' : ''} free! (Maximum ${currentDeal.limit} donuts allowed)` :
-                      `Choose exactly ${currentDeal?.limit || 4} donuts for your combo! (Maximum ${currentDeal?.limit || 4} donuts allowed)`
-                    }
-                  </p>
-                </div>
-
-                {/* Donut Grid */}
-                <div className="space-y-3">
-                  {donutOptions.map((donut, index) => (
-                    <div
-                      key={index}
-                      className="bg-white rounded-lg border border-gray-200 p-3 hover:shadow-md transition-shadow min-h-[180px] flex flex-col"
-                    >
-                      <img
-                        src={donut.image}
-                        alt={donut.name}
-                        className="menu-image-surface w-full h-20 object-contain mb-2 flex-shrink-0 rounded-xl"
-                      />
-                      <div className="text-center flex flex-col flex-1">
-                        <h3 className="font-semibold text-sm mb-1">{donut.name}</h3>
-                        <div className="text-xs text-gray-600 mb-2">Rs.{donut.price}/-</div>
-                        <div className="mt-auto">
-                          <ModalSmartCounter
-                            donutName={donut.name}
-                            price={donut.price}
-                            count={getCurrentDealSelection().selectedDonuts[donut.name] || 0}
-                            onAdd={() => addToCart(donut.name, donut.price)}
-                            onRemove={() => removeFromCart(donut.name, donut.price)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Modal Footer */}
-              <div className="p-4 border-t bg-gray-50">
-                <div className="flex justify-between items-center">
-                  <div className="text-sm text-gray-600">
-                    Selected: <span className="font-semibold">{getTotalSelectedCount()}/{currentDeal?.limit || 7}</span> donuts
-                    <br />
-                    <span className="text-xs">Total: Rs.{getCurrentTotalAmount()}/-</span>
-                  </div>
-                  <button
-                    className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                      getTotalSelectedCount() >= (currentDeal?.limit || 7)
-                        ? 'bg-green-600 text-white hover:bg-green-700' 
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    }`}
-                    onClick={() => {
-                      const limit = currentDeal?.limit || 7;
-                      if (getTotalSelectedCount() >= limit) {
-                        if (currentDeal?.type === "deal" && currentDeal?.freeCount) {
-                          // Show free donut selection modal only for deals with free donuts
-                          setShowFreeDonutModal(true);
-                        } else {
-                          // For combos, add the entire combo as one item to cart
-                          const selectedDonuts = getCurrentDealSelection().selectedDonuts;
-                          const comboName = currentDeal?.title || `Box of ${currentDeal?.limit}`;
-                          const comboPrice = getCurrentTotalAmount();
-                          
-                          // Create combo details
-                          const comboDetails = Object.keys(selectedDonuts).map(donutName => 
-                            `${donutName} (${selectedDonuts[donutName]})`
-                          ).join(', ');
-                          
-                          addItemToCart(comboName, comboPrice, undefined, comboDetails);
-                          setShowDonutModal(false);
-                          // Clear the current deal selection
-                          const dealKey = getCurrentDealKey();
-                          if (dealKey) {
-                            setDealSelections(prev => {
-                              const newSelections = { ...prev };
-                              delete newSelections[dealKey];
-                              return newSelections;
-                            });
-                          }
-                        }
-                      }
-                    }}
-                  >
-                    {currentDeal?.type === "deal" && currentDeal?.freeCount 
-                      ? `Select ${currentDeal.freeCount} Free Donut${currentDeal.freeCount > 1 ? 's' : ''}` 
-                      : 'Complete Order'}
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Free Donut Selection Modal */}
-      <AnimatePresence>
-        {showFreeDonutModal && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center"
-            onClick={() => setShowFreeDonutModal(false)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: dragOffset }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="bg-white rounded-2xl w-full max-w-md mx-4 overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-              style={{ transform: `translateY(${dragOffset}px)` }}
-            >
-              {/* Modal Header */}
-              <div 
-                className="flex items-center justify-between p-4 border-b cursor-grab active:cursor-grabbing"
-                onMouseDown={handleDragStart}
-                onMouseMove={handleDragMove}
-                onMouseUp={handleDragEnd}
-                onMouseLeave={handleDragEnd}
-                onTouchStart={handleDragStart}
-                onTouchMove={handleDragMove}
-                onTouchEnd={handleDragEnd}
-              >
-                <h2 className="text-xl font-bold">Choose Your Free Classic Donut</h2>
-                <button
-                  onClick={() => setShowFreeDonutModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-4">
-                <div className="mb-4">
-                  <p className="text-sm text-gray-600 mb-4">
-                    You've selected {currentDeal?.limit || 7} donuts! Choose {currentDeal?.freeCount || 1} classic donut{(currentDeal?.freeCount || 1) > 1 ? 's' : ''} for free:
-                  </p>
-                </div>
-
-                {/* Classic Donut Options */}
-                <div className="space-y-3">
-                  {donutOptions.filter(donut => donut.category === "Classic").map((donut, index) => (
-                    <div
-                      key={index}
-                      className={`flex items-center p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                        getCurrentFreeDonuts().includes(donut.name)
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                      onClick={() => {
-                        const currentFreeDonuts = getCurrentFreeDonuts();
-                        if (currentFreeDonuts.includes(donut.name)) {
-                          setCurrentFreeDonuts(currentFreeDonuts.filter(name => name !== donut.name));
-                        } else {
-                          const maxFree = currentDeal?.freeCount || 1;
-                          if (currentFreeDonuts.length < maxFree) {
-                            setCurrentFreeDonuts([...currentFreeDonuts, donut.name]);
-                          }
-                        }
-                      }}
-                    >
-                      <img
-                        src={donut.image}
-                        alt={donut.name}
-                        className="menu-image-surface w-16 h-16 object-contain mr-3 rounded-xl"
-                      />
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-sm">{donut.name}</h3>
-                        <p className="text-xs text-gray-500">Classic Donut</p>
-                      </div>
-                      <div className="text-sm font-bold text-green-600">
-                        FREE
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Modal Footer */}
-              <div className="p-4 border-t bg-gray-50">
-                <div className="flex justify-between items-center">
-                  <div className="text-sm text-gray-600">
-                    <div>Selected: <span className="font-semibold">{getTotalSelectedCount()}</span> donuts</div>
-                    <div>Total: <span className="font-semibold">Rs.{getCurrentTotalAmount()}/-</span></div>
-                    {getCurrentFreeDonuts().length > 0 && (
-                      <div className="text-green-600 text-xs">
-                        + {getCurrentFreeDonuts().length} free: {getCurrentFreeDonuts().join(', ')}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                      getCurrentFreeDonuts().length === (currentDeal?.freeCount || 1)
-                        ? 'bg-green-600 text-white hover:bg-green-700' 
-                        : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    }`}
-                    onClick={() => {
-                      const requiredFree = currentDeal?.freeCount || 1;
-                      if (getCurrentFreeDonuts().length === requiredFree) {
-                        // Add the entire deal as one item to cart
-                        const selectedDonuts = getCurrentDealSelection().selectedDonuts;
-                        const dealName = currentDeal?.title || `Deal`;
-                        const dealPrice = getCurrentTotalAmount();
-                        
-                        // Create deal details
-                        const dealDetails = Object.keys(selectedDonuts).map(donutName => 
-                          `${donutName} (${selectedDonuts[donutName]})`
-                        ).join(', ');
-                        
-                        // Add free donuts to details
-                        const freeDonuts = getCurrentFreeDonuts();
-                        const freeDetails = freeDonuts.length > 0 ? 
-                          ` + FREE: ${freeDonuts.join(', ')}` : '';
-                        
-                        const fullDetails = dealDetails + freeDetails;
-                        
-                        addItemToCart(dealName, dealPrice, undefined, fullDetails);
-                        
-                        setShowFreeDonutModal(false);
-                        setShowDonutModal(false);
-                        // Clear the current deal selection
-                        const dealKey = getCurrentDealKey();
-                        if (dealKey) {
-                          setDealSelections(prev => {
-                            const newSelections = { ...prev };
-                            delete newSelections[dealKey];
-                            return newSelections;
-                          });
-                        }
-                      }
-                    }}
-                  >
-                    Complete Order
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
         )}
       </AnimatePresence>
 
@@ -3280,17 +4041,29 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   <p className="text-center text-gray-500 py-10">Your cart is empty</p>
                 ) : (
                   <>
+                    {hasOutOfStockItemsInCart ? (
+                      <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                        <p className="text-sm font-semibold text-red-700 heading-font">
+                          Out-of-stock items in cart
+                        </p>
+                        <p className="mt-1 text-xs text-red-700 subtext-font">
+                          Remove unavailable items to continue to checkout.
+                        </p>
+                      </div>
+                    ) : null}
                     {Object.entries(cart).map(([key, item]) => (
                       <div key={key} className="flex items-center justify-between pb-4 border-b">
                         <div className="flex items-center gap-3">
-                          {item.image && (
-                            <img src={item.image} alt={item.name} className="w-14 h-14 rounded-lg object-cover" />
-                          )}
                           <div>
                             <p className="text-lg font-semibold text-gray-900 heading-font">{item.name}</p>
                             <p className="text-base text-gray-700 subtext-font">Rs.{item.price}/-</p>
                             {item.details ? (
                               <p className="mt-1 text-xs text-gray-500 subtext-font line-clamp-2">{item.details}</p>
+                            ) : null}
+                            {isCartItemOutOfStock(item) ? (
+                              <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                                Out of stock
+                              </div>
                             ) : null}
                           </div>
                         </div>
@@ -3300,14 +4073,96 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                           </button>
                           <span className="text-base font-semibold heading-font">{item.quantity}</span>
                           <button
-                            onClick={() => addItemToCart(item.name, item.price, item.image, item.details)}
-                            className="p-1"
+                            onClick={() =>
+                              addItemToCart(item.name, item.price, item.image, item.details, {
+                                menuItemId: item.menuItemId,
+                                baseItemName: item.baseItemName || item.name,
+                              })
+                            }
+                            disabled={isCartItemOutOfStock(item)}
+                            className={`p-1 ${isCartItemOutOfStock(item) ? "cursor-not-allowed text-gray-400" : ""}`}
                           >
                             <Plus size={16} />
                           </button>
                         </div>
                       </div>
                     ))}
+
+                    {/* Frequently Bought Together Section */}
+                    {Object.keys(cart).length > 0 && (
+                      <div className="pt-2 border-t">
+                        <p className="text-lg font-semibold text-gray-900 heading-font mb-3">
+                          Frequently bought together
+                        </p>
+                        <div className="flex space-x-4 overflow-x-auto pb-1">
+                          {SUGGESTED_ITEMS.slice(0, 3).map((item) => {
+                            const isInCart = Object.values(cart).some(cartItem => cartItem.name === item.name);
+                            const unavailable = isMenuItemOutOfStock(undefined, item.name);
+                            return (
+                              <div
+                                key={item.name}
+                                className={`relative rounded-lg shadow w-64 flex-shrink-0 cursor-pointer transition-all ${
+                                  isInCart
+                                    ? "bg-black text-white shadow-lg"
+                                    : unavailable
+                                      ? "bg-white opacity-65 cursor-not-allowed"
+                                      : "bg-white hover:shadow-lg"
+                                }`}
+                                onClick={() => {
+                                  if (!isInCart && !unavailable) {
+                                    addItemToCart(item.name, item.price, undefined, undefined, {
+                                      baseItemName: item.name,
+                                    });
+                                  }
+                                }}
+                              >
+                                {unavailable ? (
+                                  <div className="absolute left-3 top-3 z-10 rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                                    Out of stock
+                                  </div>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (!isInCart && !unavailable) {
+                                      addItemToCart(item.name, item.price, undefined, undefined, {
+                                        baseItemName: item.name,
+                                      });
+                                    }
+                                  }}
+                                  disabled={unavailable}
+                                  className={`absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full shadow ${
+                                    isInCart
+                                      ? "bg-white text-black"
+                                      : unavailable
+                                        ? "bg-gray-200 text-gray-500"
+                                        : "bg-white/95 text-gray-900"
+                                  }`}
+                                >
+                                  {isInCart ? <Check size={16} /> : <Plus size={16} />}
+                                </button>
+                                <div className="min-h-[150px] p-4">
+                                  <p className="font-bold text-xs mb-1 item-title">
+                                    {item.name}
+                                  </p>
+                                  <p
+                                    className={`text-xs mb-3 leading-relaxed item-description line-clamp-4 ${
+                                      isInCart ? "text-white/75" : "text-gray-500"
+                                    }`}
+                                  >
+                                    {isInCart ? "Included in this order." : "Add this to your order with one tap."}
+                                  </p>
+                                  <p className="font-bold text-sm item-price">
+                                    Rs.{item.price}/-
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 space-y-4">
                       <div>
@@ -3372,11 +4227,18 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
             <div className="bg-white border-t p-4">
               <button
+                disabled={hasOutOfStockItemsInCart}
                 onClick={() => {
+                  if (!ensureOrderingEnabled()) return;
+                  if (!ensureCartHasNoOutOfStockItems()) return;
                   setShowCart(false);
                   window.location.href = `/checkout/pay-fully${tableQuery}`;
                 }}
-                className="w-full bg-black text-white py-3 rounded-full text-base font-semibold heading-font"
+                className={`w-full py-3 rounded-full text-base font-semibold heading-font ${
+                  hasOutOfStockItemsInCart
+                    ? "cursor-not-allowed bg-gray-300 text-gray-500"
+                    : "bg-black text-white"
+                }`}
               >
                 Go to checkout
               </button>
@@ -3491,6 +4353,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 <div className="space-y-3">
                   <button
                     onClick={() => {
+                      if (!ensureOrderingEnabled()) return;
+                      if (!ensureCartHasNoOutOfStockItems()) return;
                       // Lock session if in collaborative mode
                       if (isCollaborativeSession) {
                         lockSession();
@@ -3513,6 +4377,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   
                   <button
                     onClick={() => {
+                      if (!ensureOrderingEnabled()) return;
+                      if (!ensureCartHasNoOutOfStockItems()) return;
                       // Lock session if in collaborative mode
                       if (isCollaborativeSession) {
                         lockSession();
@@ -3534,6 +4400,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   
                   <button
                     onClick={() => {
+                      if (!ensureOrderingEnabled()) return;
+                      if (!ensureCartHasNoOutOfStockItems()) return;
                       setSplitType('by-item');
                       setShowSplitOptions(false);
                       setShowCart(false);
@@ -3817,36 +4685,3 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     </motion.div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

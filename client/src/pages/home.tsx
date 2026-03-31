@@ -1,14 +1,9 @@
-import { useState } from 'react';
-import { Menu, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from "framer-motion";
-import { Badge } from '@/components/ui/badge';
 import { useLocation } from "wouter";
 
 export default function Home() {
-  const [customerName, setCustomerName] = useState('ALEX');
-  const [restaurantName] = useState('Sip');
-  const [categoryTag] = useState('Starter');
   const [, setLocation] = useLocation();
 
   const getTableIdentifier = () => {
@@ -23,14 +18,6 @@ export default function Home() {
   const tableNumberMatch = tableIdentifier.match(/(\d+)/);
   const tableNumber = tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || '1';
   const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
-
-  const handleMenuToggle = () => {
-    console.log('Toggle navigation menu');
-  };
-
-  const handleEarnPoints = () => {
-    console.log('Navigate to rewards section');
-  };
 
   const handleOrderNow = () => {
     setLocation(`/menu${tableQuery}`); // Use dynamic table identifier
@@ -72,7 +59,7 @@ export default function Home() {
           </h1>
           
           <p className="text-white text-base font-normal opacity-90 leading-relaxed mb-2">
-            Start your order —
+            Start your order -
           </p>
           <p className="text-white text-base font-normal opacity-90 leading-relaxed mb-8">
             everyone's invited.
