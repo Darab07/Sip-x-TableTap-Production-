@@ -75,7 +75,7 @@ const pruneWaiterCalls = (now = Date.now()) => {
   }
 };
 
-const buildApiRouter = (): Router => {
+export const buildApiRouter = (): Router => {
   const router = Router();
 
   router.use((_req, res, next) => {

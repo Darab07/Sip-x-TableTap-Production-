@@ -1,4 +1,6 @@
-const API_BASE = "/api";
+const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
+  "/api";
 
 const apiFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   return fetch(input, {

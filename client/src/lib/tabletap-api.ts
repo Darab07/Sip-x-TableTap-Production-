@@ -74,7 +74,9 @@ export interface AttachResponse {
   groupOrderMembers: GroupOrderMember[];
 }
 
-const API_BASE = "/api";
+const API_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
+  "/api";
 
 export const getDeviceFingerprint = () => {
   const key = "tabletapp_device_fingerprint";
