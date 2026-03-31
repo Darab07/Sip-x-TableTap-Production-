@@ -253,12 +253,60 @@ const OFFERED_MENU_ITEM_NAME_LOOKUP = new Map<string, Set<string>>(
   ]),
 );
 
-const SUGGESTED_ITEMS = [
-  { name: "Turkish Eggs", price: 1395 },
-  { name: "Golden Crunch", price: 1295 },
-  { name: "Classic Club", price: 1545 },
-  { name: "Latte", price: 240 },
+const SUGGESTED_ITEMS: MenuItemData[] = [
+  {
+    name: "Turkish Eggs",
+    price: 1395,
+    description: "Creamy garlic yogurt with poached eggs and chili butter.",
+  },
+  {
+    name: "Golden Crunch",
+    price: 1295,
+    description: "Fresh mixed greens with crunchy toppings and house dressing.",
+  },
+  {
+    name: "Classic Club",
+    price: 1545,
+    description: "Triple-layer toasted sandwich with chicken, egg, and greens.",
+  },
+  {
+    name: "Latte",
+    price: 240,
+    description: "Silky espresso and steamed milk.",
+  },
 ];
+
+const ITEM_SMART_SUGGESTIONS: Record<string, string[]> = {
+  "turkish eggs": ["Latte", "Golden Crunch", "Classic Club"],
+  "sunny hummus bowl": ["Cappuccino", "Golden Crunch", "Classic Club"],
+  "avocado toast": ["Spanish Latte", "Golden Crunch", "Classic Club"],
+  "french toast": ["Latte", "Cappuccino", "Golden Crunch"],
+  "steak & eggs": ["Flat White", "Classic Club", "Golden Crunch"],
+  "golden crunch": ["Classic Club", "Latte", "Spanish Latte"],
+  "ceaser salad": ["Classic Club", "Flat White", "Peach Iced Tea"],
+  "grilled chicken pesto": ["Golden Crunch", "Latte", "Peach Iced Tea"],
+  "mexi beef focaccia": ["Flat White", "Golden Crunch", "Lemon Iced Tea"],
+  "sun kissed chicken": ["Cappuccino", "Golden Crunch", "Apple Mojito"],
+  "classic club": ["Golden Crunch", "Latte", "Peach Iced Tea"],
+  "focaccia fillet": ["Spanish Latte", "Golden Crunch", "Lemon Iced Tea"],
+  "beef melt": ["Cortado", "Golden Crunch", "Peach Iced Tea"],
+  "espresso": ["French Toast", "Classic Club", "Golden Crunch"],
+  "cappuccino": ["French Toast", "Classic Club", "Golden Crunch"],
+  "latte": ["French Toast", "Classic Club", "Golden Crunch"],
+  "spanish latte": ["French Toast", "Classic Club", "Golden Crunch"],
+  "matcha": ["French Toast", "Golden Crunch", "Classic Club"],
+  "spanish matcha": ["French Toast", "Golden Crunch", "Classic Club"],
+};
+
+const DEFAULT_SUGGESTIONS_BY_CATEGORY: Record<string, string[]> = {
+  breakfast: ["Latte", "Golden Crunch", "Classic Club"],
+  salads: ["Classic Club", "Spanish Latte", "Peach Iced Tea"],
+  sandwiches: ["Golden Crunch", "Latte", "Peach Iced Tea"],
+  coffee: ["French Toast", "Classic Club", "Golden Crunch"],
+  "slow-bar": ["Classic Club", "Golden Crunch", "Avocado Toast"],
+  "not-coffee": ["Classic Club", "French Toast", "Golden Crunch"],
+  matcha: ["French Toast", "Golden Crunch", "Classic Club"],
+};
 
 // Smart Counter Component
 function SmartCounter({ 
@@ -554,6 +602,58 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const NOT_COFFEE_SOURCE = remoteItemsByCategory.get("not-coffee") ?? [];
   const MATCHA_SOURCE = remoteItemsByCategory.get("matcha") ?? [];
 
+  const menuItemLookupByName = useMemo(() => {
+    const lookup = new Map<string, MenuItemData>();
+    const allSourceItems = [
+      ...BREAKFAST_SOURCE,
+      ...SALAD_SOURCE,
+      ...SANDWICH_SOURCE,
+      ...COFFEE_SOURCE,
+      ...SLOW_BAR_SOURCE,
+      ...NOT_COFFEE_SOURCE,
+      ...MATCHA_SOURCE,
+    ];
+    allSourceItems.forEach((item) => {
+      lookup.set(item.name.toLowerCase(), item);
+    });
+    return lookup;
+  }, [
+    BREAKFAST_SOURCE,
+    SALAD_SOURCE,
+    SANDWICH_SOURCE,
+    COFFEE_SOURCE,
+    SLOW_BAR_SOURCE,
+    NOT_COFFEE_SOURCE,
+    MATCHA_SOURCE,
+  ]);
+
+  const menuItemCategoryByName = useMemo(() => {
+    const lookup = new Map<string, string>();
+    const registerCategory = (items: MenuItemData[], category: string) => {
+      items.forEach((item) => {
+        lookup.set(item.name.toLowerCase(), category);
+      });
+    };
+
+    registerCategory(BREAKFAST_SOURCE, "breakfast");
+    registerCategory(SALAD_SOURCE, "salads");
+    registerCategory(SANDWICH_SOURCE, "sandwiches");
+    registerCategory(COFFEE_SOURCE, "coffee");
+    registerCategory(SLOW_BAR_SOURCE, "slow-bar");
+    registerCategory(NOT_COFFEE_SOURCE, "not-coffee");
+    registerCategory(MATCHA_SOURCE, "matcha");
+
+    return lookup;
+  }, [
+    BREAKFAST_SOURCE,
+    SALAD_SOURCE,
+    SANDWICH_SOURCE,
+    COFFEE_SOURCE,
+    SLOW_BAR_SOURCE,
+    NOT_COFFEE_SOURCE,
+    MATCHA_SOURCE,
+  ]);
+
   useEffect(() => {
     lastOrderRef.current = lastOrder;
   }, [lastOrder]);
@@ -728,6 +828,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       tableAccess?.message ||
         "This table cannot be used to place an order right now.",
     );
+    return false;
+  };
+
+  const ensureCartAuth = () => {
+    if (isMenuAuthenticated) return true;
+    setAuthError("Please log in to add items to your cart.");
+    openAuthDrawer("login");
     return false;
   };
 
@@ -1418,9 +1525,17 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return basePrice > 0 ? `Rs.${basePrice.toLocaleString()}/-` : null;
   };
 
+  const getSuggestedItemByName = (itemName: string) => {
+    const key = itemName.toLowerCase();
+    return (
+      menuItemLookupByName.get(key) ??
+      SUGGESTED_ITEMS.find((item) => item.name.toLowerCase() === key)
+    );
+  };
+
   const getSuggestedSelectionTotal = () =>
     selectedSuggestedItems.reduce((total, itemName) => {
-      const suggestion = SUGGESTED_ITEMS.find((item) => item.name === itemName);
+      const suggestion = getSuggestedItemByName(itemName);
       if (!suggestion) return total;
       return total + resolvePrice(suggestion.name, suggestion.price);
     }, 0);
@@ -1480,6 +1595,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     details?: string,
     meta?: { menuItemId?: string; baseItemName?: string },
   ) => {
+    if (!ensureCartAuth()) {
+      return;
+    }
+
     if (!ensureOrderingEnabled()) {
       return;
     }
@@ -1582,7 +1701,30 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const numericFallback = typeof fallback === "number" ? fallback : 0;
     if (numericFallback > 0) return numericFallback;
     const key = name.toLowerCase();
-    const suggested = SUGGESTED_ITEMS.find(item => item.name.toLowerCase() === key);
+    const menuItem = menuItemLookupByName.get(key);
+    if (menuItem) {
+      if (typeof menuItem.price === "number" && menuItem.price > 0) {
+        return menuItem.price;
+      }
+
+      const temperatureFromOptions = menuItem.temperatureOptions
+        ?.map((option) => menuItem.temperaturePrices?.[option])
+        .find((price): price is number => typeof price === "number");
+      if (typeof temperatureFromOptions === "number") {
+        return temperatureFromOptions;
+      }
+
+      const firstTemperaturePrice = Object.values(menuItem.temperaturePrices ?? {}).find(
+        (price): price is number => typeof price === "number",
+      );
+      if (typeof firstTemperaturePrice === "number") {
+        return firstTemperaturePrice;
+      }
+    }
+
+    const suggested = SUGGESTED_ITEMS.find(
+      (item) => item.name.toLowerCase() === key,
+    );
     return suggested?.price ?? 0;
   };
 
@@ -1765,6 +1907,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const handleAddSelectedItem = () => {
     if (!selectedItem) return;
+    if (!ensureCartAuth()) return;
     if (!ensureOrderingEnabled()) return;
     if (isMenuItemOutOfStock(selectedItem.menuItemId, selectedItem.name)) {
       window.alert(`${selectedItem.name} is currently out of stock.`);
@@ -1798,16 +1941,19 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     }
 
     selectedSuggestedItems
-      .filter((itemName) => !isMenuItemOutOfStock(undefined, itemName))
+      .filter((itemName) => {
+        const suggestion = getSuggestedItemByName(itemName);
+        return !isMenuItemOutOfStock(suggestion?.menuItemId, itemName);
+      })
       .forEach((itemName) => {
-      const suggestion = SUGGESTED_ITEMS.find((item) => item.name === itemName);
+      const suggestion = getSuggestedItemByName(itemName);
       if (!suggestion) return;
       addItemToCart(
         suggestion.name,
         resolvePrice(suggestion.name, suggestion.price),
         undefined,
-        "Frequently bought together",
-        { baseItemName: suggestion.name },
+        suggestion.description || "Frequently bought together",
+        { menuItemId: suggestion.menuItemId, baseItemName: suggestion.name },
       );
       });
 
@@ -1992,6 +2138,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     }
     setIsMenuAuthenticated(false);
     localStorage.removeItem(MENU_AUTH_KEY);
+    setCart({});
+    localStorage.removeItem(getCartKey());
   };
 
   // Listen for order placed events from checkout
@@ -2096,9 +2244,34 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     };
   }, [lastOrder?.orderNumber, lastOrder?.status]);
 
-  const getSuggestedItems = (currentName: string) => {
-    const filtered = SUGGESTED_ITEMS.filter(item => item.name.toLowerCase() !== currentName.toLowerCase());
-    return (filtered.length ? filtered : SUGGESTED_ITEMS).slice(0, 2);
+  const getSuggestedItems = (currentName?: string) => {
+    const currentKey = (currentName || "").toLowerCase().trim();
+    const byItem = ITEM_SMART_SUGGESTIONS[currentKey] ?? [];
+    const currentCategory = menuItemCategoryByName.get(currentKey);
+    const byCategory = currentCategory
+      ? DEFAULT_SUGGESTIONS_BY_CATEGORY[currentCategory] ?? []
+      : [];
+    const fallbackNames = SUGGESTED_ITEMS.map((item) => item.name);
+
+    const candidateNames = [...byItem, ...byCategory, ...fallbackNames];
+    const suggestions: MenuItemData[] = [];
+
+    for (const candidateName of candidateNames) {
+      const candidate = getSuggestedItemByName(candidateName);
+      if (!candidate) continue;
+      const candidateKey = candidate.name.toLowerCase();
+      if (candidateKey === currentKey) continue;
+      if (resolvePrice(candidate.name, candidate.price) <= 0) continue;
+      if (suggestions.some((item) => item.name.toLowerCase() === candidateKey)) {
+        continue;
+      }
+      suggestions.push(candidate);
+      if (suggestions.length >= 3) {
+        break;
+      }
+    }
+
+    return suggestions;
   };
 
   const processCartSyncEvent = () => {
@@ -3924,7 +4097,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     <div className="flex space-x-4 overflow-x-auto pb-1">
                       {getSuggestedItems(selectedItem.name).map(suggestion => {
                         const isSelected = selectedSuggestedItems.includes(suggestion.name);
-                        const unavailable = isMenuItemOutOfStock(undefined, suggestion.name);
+                        const unavailable = isMenuItemOutOfStock(
+                          suggestion.menuItemId,
+                          suggestion.name,
+                        );
                         return (
                           <div
                             key={suggestion.name}
@@ -3968,8 +4144,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                                   isSelected ? "text-white/75" : "text-gray-500"
                                 }`}
                               >
-                                {isSelected ? "Included in this order." : "Add this to your order with one tap."}
+                                {(suggestion.description || "Popular pairing for this item.").trim()}
                               </p>
+                              {isSelected ? (
+                                <p className="mb-2 text-[11px] font-medium text-white/80">
+                                  Included in this order.
+                                </p>
+                              ) : null}
                               <p className="font-bold text-sm item-price">
                                 Rs.{(resolvePrice(suggestion.name, suggestion.price) || 0).toLocaleString()}/-
                               </p>
@@ -4099,9 +4280,20 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                           Frequently bought together
                         </p>
                         <div className="flex space-x-4 overflow-x-auto pb-1">
-                          {SUGGESTED_ITEMS.slice(0, 3).map((item) => {
-                            const isInCart = Object.values(cart).some(cartItem => cartItem.name === item.name);
-                            const unavailable = isMenuItemOutOfStock(undefined, item.name);
+                          {getSuggestedItems(
+                            Object.values(cart)[0]?.baseItemName ||
+                              Object.values(cart)[0]?.name ||
+                              "",
+                          ).map((item) => {
+                            const isInCart = Object.values(cart).some(
+                              (cartItem) =>
+                                (cartItem.baseItemName || cartItem.name).toLowerCase() ===
+                                item.name.toLowerCase(),
+                            );
+                            const unavailable = isMenuItemOutOfStock(
+                              item.menuItemId,
+                              item.name,
+                            );
                             return (
                               <div
                                 key={item.name}
@@ -4114,9 +4306,16 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                                 }`}
                                 onClick={() => {
                                   if (!isInCart && !unavailable) {
-                                    addItemToCart(item.name, item.price, undefined, undefined, {
-                                      baseItemName: item.name,
-                                    });
+                                    addItemToCart(
+                                      item.name,
+                                      resolvePrice(item.name, item.price),
+                                      undefined,
+                                      item.description,
+                                      {
+                                        menuItemId: item.menuItemId,
+                                        baseItemName: item.name,
+                                      },
+                                    );
                                   }
                                 }}
                               >
@@ -4130,9 +4329,16 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     if (!isInCart && !unavailable) {
-                                      addItemToCart(item.name, item.price, undefined, undefined, {
-                                        baseItemName: item.name,
-                                      });
+                                      addItemToCart(
+                                        item.name,
+                                        resolvePrice(item.name, item.price),
+                                        undefined,
+                                        item.description,
+                                        {
+                                          menuItemId: item.menuItemId,
+                                          baseItemName: item.name,
+                                        },
+                                      );
                                     }
                                   }}
                                   disabled={unavailable}
@@ -4155,10 +4361,15 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                                       isInCart ? "text-white/75" : "text-gray-500"
                                     }`}
                                   >
-                                    {isInCart ? "Included in this order." : "Add this to your order with one tap."}
+                                    {(item.description || "Popular pairing for your cart.").trim()}
                                   </p>
+                                  {isInCart ? (
+                                    <p className="mb-2 text-[11px] font-medium text-white/80">
+                                      Included in this order.
+                                    </p>
+                                  ) : null}
                                   <p className="font-bold text-sm item-price">
-                                    Rs.{item.price}/-
+                                    Rs.{resolvePrice(item.name, item.price).toLocaleString()}/-
                                   </p>
                                 </div>
                               </div>

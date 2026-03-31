@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ChevronRight, CreditCard, Info, Lock, Plus } from "lucide-react";
+import { ArrowLeft, Check, Info, Lock } from "lucide-react";
 import { useLocation } from "wouter";
 import { getOrCreateUserID } from "@/lib/userID";
 import {
@@ -28,7 +28,7 @@ interface StoredOrder {
   gstAmount: number;
   tableLabel: string;
   notes: string;
-  status: 'placed' | 'confirmed' | 'preparing' | 'served';
+  status: "placed" | "confirmed" | "preparing" | "served";
   statusHistory: Array<{
     status: string;
     timestamp: number;
@@ -40,10 +40,10 @@ interface StoredOrder {
 const userId = getOrCreateUserID();
 const getStoredOrderKey = () => `lastOrder_${userId}`;
 
-type CardChoice = "saved" | "new";
+type CardChoice = "saved" | "debit" | "jazzcash" | "easypaisa";
 
 const SAVED_CARD = {
-  label: "Saved card",
+  label: "4242 ****",
   last4: "4242",
   expiry: "08/28",
 };
@@ -52,7 +52,8 @@ export default function Checkout() {
   const [location, setLocation] = useLocation();
   const [cart, setCart] = useState<Record<string, CartItem>>({});
   const [selectedTip, setSelectedTip] = useState(0);
-  const [selectedCardChoice, setSelectedCardChoice] = useState<CardChoice>("saved");
+  const [selectedCardChoice, setSelectedCardChoice] =
+    useState<CardChoice>("saved");
   const [showNewCardForm, setShowNewCardForm] = useState(false);
   const [cardholderName, setCardholderName] = useState("");
   const [cardNumber, setCardNumber] = useState("");
@@ -79,14 +80,31 @@ export default function Checkout() {
   }, []);
 
   const subtotal = useMemo(
-    () => Object.values(cart).reduce((total, item) => total + item.price * item.quantity, 0),
+    () =>
+      Object.values(cart).reduce(
+        (total, item) => total + item.price * item.quantity,
+        0,
+      ),
     [cart],
   );
-  const tipAmount = useMemo(() => Math.round((subtotal * selectedTip) / 100), [subtotal, selectedTip]);
+  const tipAmount = useMemo(
+    () => Math.round((subtotal * selectedTip) / 100),
+    [subtotal, selectedTip],
+  );
   const gstAmount = useMemo(() => Math.round(subtotal * 0.05), [subtotal]);
-  const serviceFee = useMemo(() => Math.round((subtotal + gstAmount) * 0.01), [subtotal, gstAmount]);
+  const serviceFee = useMemo(
+    () => Math.round((subtotal + gstAmount) * 0.01),
+    [subtotal, gstAmount],
+  );
   const total = subtotal + tipAmount + gstAmount + serviceFee;
-  const paymentLabel = selectedCardChoice === "new" ? "Pay with new card" : "Pay with saved card";
+  const paymentLabel =
+    selectedCardChoice === "saved"
+      ? "Pay with saved card"
+      : selectedCardChoice === "debit"
+        ? "Pay with debit card"
+        : selectedCardChoice === "jazzcash"
+          ? "Pay with JazzCash"
+          : "Pay with Easypaisa";
   const tableLabel = useMemo(() => {
     if (typeof window === "undefined") return "Table 1";
     const params = new URLSearchParams(window.location.search);
@@ -105,7 +123,8 @@ export default function Checkout() {
   const validateCardNumber = (number: string) => {
     const cleanNumber = number.replace(/\s/g, "");
     if (!cleanNumber) return "Card number is required";
-    if (!/^\d{13,19}$/.test(cleanNumber)) return "Card number must be 13-19 digits";
+    if (!/^\d{13,19}$/.test(cleanNumber))
+      return "Card number must be 13-19 digits";
     return "";
   };
 
@@ -149,7 +168,7 @@ export default function Checkout() {
   };
 
   const handlePayment = async () => {
-    if (selectedCardChoice === "new" && !validateCardForm()) {
+    if (selectedCardChoice === "debit" && !validateCardForm()) {
       return;
     }
 
@@ -222,8 +241,7 @@ export default function Checkout() {
     localStorage.removeItem(`orderNotes_${userId}`);
     localStorage.removeItem("splitType");
 
-    // Show success notification
-    const event = new CustomEvent('orderPlaced', { detail: orderData });
+    const event = new CustomEvent("orderPlaced", { detail: orderData });
     window.dispatchEvent(event);
 
     try {
@@ -259,29 +277,75 @@ export default function Checkout() {
       exit={{ opacity: 0 }}
       className="min-h-screen bg-[#f3f2ef]"
     >
-      <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-5 py-6">
-        <div className="flex items-center justify-between pb-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 py-5">
+        <div className="flex items-center justify-between pb-6">
           <button
             type="button"
             onClick={handleBack}
-            className="flex h-10 w-10 items-center justify-center rounded-full text-gray-700 transition-colors hover:bg-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full text-gray-700 transition-colors hover:bg-white/80"
           >
             <ArrowLeft size={18} />
           </button>
-          <h1 className="text-xl font-semibold text-gray-900 heading-font">Your order</h1>
+          <h1 className="text-xl font-semibold text-gray-900 heading-font">
+            Payment methods
+          </h1>
           <div className="w-10" />
         </div>
 
         <div className="space-y-6">
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-900 heading-font">Pay securely</h2>
-            <p className="mt-1 text-sm text-gray-500 subtext-font">
-              Choose your payment method to complete your order.
-            </p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm text-gray-600 subtext-font">
+              <span>Subtotal</span>
+              <span className="font-semibold text-gray-900 heading-font">
+                Rs.{subtotal.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm text-gray-600 subtext-font">
+              <span>Tips</span>
+              <span className="font-semibold text-gray-900 heading-font">
+                Rs.{tipAmount.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm text-gray-600 subtext-font">
+              <span className="flex items-center gap-1">
+                Platform fee
+                <Info size={14} className="text-gray-500" />
+              </span>
+              <span className="font-semibold text-gray-900 heading-font">
+                Rs.{serviceFee.toLocaleString()}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-sm text-gray-600 subtext-font">
+              <span className="flex items-center gap-1">
+                Taxes
+                <Info size={14} className="text-gray-500" />
+              </span>
+              <span className="font-semibold text-gray-900 heading-font">
+                Rs.{gstAmount.toLocaleString()}
+              </span>
+            </div>
+            <div className="border-t border-gray-300 pt-4">
+              <div className="flex items-center justify-between text-lg font-semibold text-gray-900 heading-font">
+                <span>Total</span>
+                <span>Rs.{total.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded-full bg-gray-200 px-4 py-2 text-sm font-medium text-gray-800 heading-font"
+            >
+              Add promo code
+            </button>
           </div>
 
           <div className="space-y-3">
-            {/* Saved Card Option */}
+            <h2 className="text-lg font-semibold text-gray-900 heading-font">
+              Pay with
+            </h2>
+
             <button
               type="button"
               onClick={() => {
@@ -290,72 +354,71 @@ export default function Checkout() {
               }}
               className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors ${
                 selectedCardChoice === "saved"
-                  ? "border-black bg-gray-50"
-                  : "border-gray-200 bg-white"
+                  ? "border-black bg-white"
+                  : "border-gray-300 bg-[#f5f5f4]"
               }`}
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black text-white">
-                  <CreditCard size={18} />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 heading-font">{SAVED_CARD.label}</p>
-                  <p className="text-sm text-gray-500 subtext-font">
-                    •••• {SAVED_CARD.last4} · Expires {SAVED_CARD.expiry}
-                  </p>
-                </div>
+              <p className="text-base font-semibold text-gray-900 heading-font">
+                {SAVED_CARD.label}
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-gray-100 px-2 py-1 text-xs font-semibold text-[#1a3db7]">
+                  VISA
+                </span>
+                <span
+                  className={`flex h-7 w-7 items-center justify-center rounded-md border ${
+                    selectedCardChoice === "saved"
+                      ? "border-black bg-black text-white"
+                      : "border-gray-300 bg-white"
+                  }`}
+                >
+                  {selectedCardChoice === "saved" ? <Check size={15} /> : null}
+                </span>
               </div>
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full border ${
-                  selectedCardChoice === "saved"
-                    ? "border-black bg-black text-white"
-                    : "border-gray-300"
-                }`}
-              >
-                {selectedCardChoice === "saved" ? <Check size={14} /> : null}
-              </span>
             </button>
 
-            {/* Add New Card Option */}
             <button
               type="button"
               onClick={() => {
-                setSelectedCardChoice("new");
-                setShowNewCardForm(!showNewCardForm);
+                setSelectedCardChoice("debit");
+                setShowNewCardForm(
+                  (prev) => !prev || selectedCardChoice !== "debit",
+                );
               }}
               className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors ${
-                selectedCardChoice === "new"
-                  ? "border-black bg-gray-50"
-                  : "border-gray-200 bg-white"
+                selectedCardChoice === "debit"
+                  ? "border-black bg-white"
+                  : "border-gray-300 bg-[#f5f5f4]"
               }`}
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-600">
-                  <Plus size={18} />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 heading-font">Add new card</p>
-                  <p className="text-sm text-gray-500 subtext-font">Enter card information manually</p>
-                </div>
+              <p className="text-base font-semibold text-gray-900 heading-font">
+                Debit Card
+              </p>
+              <div className="flex items-center gap-1.5">
+                <span className="rounded bg-gray-100 px-1.5 py-1 text-[10px] font-semibold text-[#1a3db7]">
+                  VISA
+                </span>
+                <span className="rounded bg-gray-100 px-1.5 py-1 text-[10px] font-semibold text-[#cc4f00]">
+                  MC
+                </span>
+                <span
+                  className={`ml-1 flex h-7 w-7 items-center justify-center rounded-md border ${
+                    selectedCardChoice === "debit"
+                      ? "border-black bg-black text-white"
+                      : "border-gray-300 bg-white"
+                  }`}
+                >
+                  {selectedCardChoice === "debit" ? <Check size={15} /> : null}
+                </span>
               </div>
-              <span
-                className={`flex h-6 w-6 items-center justify-center rounded-full border ${
-                  selectedCardChoice === "new"
-                    ? "border-black bg-black text-white"
-                    : "border-gray-300"
-                }`}
-              >
-                {selectedCardChoice === "new" ? <Check size={14} /> : null}
-              </span>
             </button>
 
-            {/* New Card Form */}
-            {showNewCardForm && selectedCardChoice === "new" && (
+            {showNewCardForm && selectedCardChoice === "debit" && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
-                className="rounded-2xl border border-gray-200 bg-white p-4 space-y-4"
+                className="rounded-2xl border border-gray-300 bg-white p-4 space-y-4"
               >
                 <div>
                   <input
@@ -364,16 +427,23 @@ export default function Checkout() {
                     onChange={(event) => {
                       setCardholderName(event.target.value);
                       if (errors.cardholderName) {
-                        setErrors((prev) => ({ ...prev, cardholderName: undefined }));
+                        setErrors((prev) => ({
+                          ...prev,
+                          cardholderName: undefined,
+                        }));
                       }
                     }}
                     placeholder="Cardholder name"
                     className={`w-full rounded-2xl border px-4 py-3 text-sm text-gray-900 outline-none transition-colors ${
-                      errors.cardholderName ? "border-red-500" : "border-gray-200 focus:border-black"
+                      errors.cardholderName
+                        ? "border-red-500"
+                        : "border-gray-200 focus:border-black"
                     }`}
                   />
                   {errors.cardholderName ? (
-                    <p className="mt-1 text-xs text-red-500 subtext-font">{errors.cardholderName}</p>
+                    <p className="mt-1 text-xs text-red-500 subtext-font">
+                      {errors.cardholderName}
+                    </p>
                   ) : null}
                 </div>
 
@@ -384,16 +454,23 @@ export default function Checkout() {
                     onChange={(event) => {
                       setCardNumber(formatCardNumber(event.target.value));
                       if (errors.cardNumber) {
-                        setErrors((prev) => ({ ...prev, cardNumber: undefined }));
+                        setErrors((prev) => ({
+                          ...prev,
+                          cardNumber: undefined,
+                        }));
                       }
                     }}
                     placeholder="Card number"
                     className={`w-full rounded-2xl border px-4 py-3 text-sm text-gray-900 outline-none transition-colors ${
-                      errors.cardNumber ? "border-red-500" : "border-gray-200 focus:border-black"
+                      errors.cardNumber
+                        ? "border-red-500"
+                        : "border-gray-200 focus:border-black"
                     }`}
                   />
                   {errors.cardNumber ? (
-                    <p className="mt-1 text-xs text-red-500 subtext-font">{errors.cardNumber}</p>
+                    <p className="mt-1 text-xs text-red-500 subtext-font">
+                      {errors.cardNumber}
+                    </p>
                   ) : null}
                 </div>
 
@@ -405,16 +482,23 @@ export default function Checkout() {
                       onChange={(event) => {
                         setExpiration(formatExpiration(event.target.value));
                         if (errors.expiration) {
-                          setErrors((prev) => ({ ...prev, expiration: undefined }));
+                          setErrors((prev) => ({
+                            ...prev,
+                            expiration: undefined,
+                          }));
                         }
                       }}
                       placeholder="MM/YY"
                       className={`w-full rounded-2xl border px-4 py-3 text-sm text-gray-900 outline-none transition-colors ${
-                        errors.expiration ? "border-red-500" : "border-gray-200 focus:border-black"
+                        errors.expiration
+                          ? "border-red-500"
+                          : "border-gray-200 focus:border-black"
                       }`}
                     />
                     {errors.expiration ? (
-                      <p className="mt-1 text-xs text-red-500 subtext-font">{errors.expiration}</p>
+                      <p className="mt-1 text-xs text-red-500 subtext-font">
+                        {errors.expiration}
+                      </p>
                     ) : null}
                   </div>
 
@@ -430,66 +514,90 @@ export default function Checkout() {
                       }}
                       placeholder="CVC"
                       className={`w-full rounded-2xl border px-4 py-3 text-sm text-gray-900 outline-none transition-colors ${
-                        errors.cvc ? "border-red-500" : "border-gray-200 focus:border-black"
+                        errors.cvc
+                          ? "border-red-500"
+                          : "border-gray-200 focus:border-black"
                       }`}
                     />
                     {errors.cvc ? (
-                      <p className="mt-1 text-xs text-red-500 subtext-font">{errors.cvc}</p>
+                      <p className="mt-1 text-xs text-red-500 subtext-font">
+                        {errors.cvc}
+                      </p>
                     ) : null}
                   </div>
                 </div>
               </motion.div>
             )}
-          </div>
 
-          <button
-            type="button"
-            className="flex w-full items-center justify-between rounded-2xl bg-white px-1 py-2 text-left"
-          >
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-black text-white">
-                <span className="text-sm font-semibold">%</span>
-              </div>
-              <span className="text-base font-medium text-gray-900 heading-font">Add a promo code</span>
-            </div>
-            <ChevronRight size={18} className="text-gray-500" />
-          </button>
-
-          <div className="rounded-3xl bg-white p-5 shadow-sm">
-            <div className="space-y-3 text-sm text-gray-600 subtext-font">
-              <div className="flex items-center justify-between">
-                <span>Subtotal</span>
-                <span className="text-gray-900">Rs.{subtotal.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Tips ({selectedTip}%)</span>
-                <span className="text-gray-900">Rs.{tipAmount.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1">
-                  Service fee
-                  <Info size={14} className="text-gray-400" />
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCardChoice("jazzcash");
+                setShowNewCardForm(false);
+              }}
+              className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors ${
+                selectedCardChoice === "jazzcash"
+                  ? "border-black bg-white"
+                  : "border-gray-300 bg-[#f5f5f4]"
+              }`}
+            >
+              <p className="text-base font-semibold text-gray-900 heading-font">
+                JazzCash
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-gray-100 px-2 py-1 text-[10px] font-semibold text-[#b30059]">
+                  JAZZCASH
                 </span>
-                <span className="text-gray-900">Rs.{serviceFee.toLocaleString()}</span>
+                <span
+                  className={`flex h-7 w-7 items-center justify-center rounded-md border ${
+                    selectedCardChoice === "jazzcash"
+                      ? "border-black bg-black text-white"
+                      : "border-gray-300 bg-white"
+                  }`}
+                >
+                  {selectedCardChoice === "jazzcash" ? <Check size={15} /> : null}
+                </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span>GST</span>
-                <span className="text-gray-900">Rs.{gstAmount.toLocaleString()}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCardChoice("easypaisa");
+                setShowNewCardForm(false);
+              }}
+              className={`flex w-full items-center justify-between rounded-2xl border px-4 py-4 text-left transition-colors ${
+                selectedCardChoice === "easypaisa"
+                  ? "border-black bg-white"
+                  : "border-gray-300 bg-[#f5f5f4]"
+              }`}
+            >
+              <p className="text-base font-semibold text-gray-900 heading-font">
+                Easypaisa
+              </p>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-gray-100 px-2 py-1 text-[10px] font-semibold text-[#008a4a]">
+                  EASYPAISA
+                </span>
+                <span
+                  className={`flex h-7 w-7 items-center justify-center rounded-md border ${
+                    selectedCardChoice === "easypaisa"
+                      ? "border-black bg-black text-white"
+                      : "border-gray-300 bg-white"
+                  }`}
+                >
+                  {selectedCardChoice === "easypaisa" ? <Check size={15} /> : null}
+                </span>
               </div>
-              <div className="border-t border-gray-200 pt-3" />
-              <div className="flex items-center justify-between text-base font-semibold text-gray-900 heading-font">
-                <span>Total</span>
-                <span>Rs.{total.toLocaleString()}</span>
-              </div>
-            </div>
+            </button>
           </div>
         </div>
 
-        <div className="mt-auto pt-8">
+        <div className="mt-auto pt-7 pb-2">
           <button
             type="button"
             onClick={handlePayment}
-            className="w-full rounded-full bg-black px-5 py-4 text-base font-semibold text-white heading-font transition-colors hover:bg-gray-900"
+            className="w-full rounded-full bg-black px-5 py-3.5 text-base font-semibold text-white heading-font transition-colors hover:bg-gray-900"
           >
             {paymentLabel}
           </button>
@@ -501,10 +609,10 @@ export default function Checkout() {
 
           <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500 subtext-font">
             <Lock size={12} />
-            <span>Secure payments with TableTap</span>
+            <span>secure payments with TableTap</span>
           </div>
 
-          <div className="mt-6 border-t border-gray-200 pt-4 text-center text-xs text-gray-400 subtext-font">
+          <div className="mt-6 border-t border-gray-300 pt-4 text-center text-xs text-gray-400 subtext-font">
             {location.includes("split-bill") ? "Split checkout" : "Checkout"}
           </div>
         </div>
@@ -512,3 +620,4 @@ export default function Checkout() {
     </motion.div>
   );
 }
+
