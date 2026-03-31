@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { log } from "./app";
+import { log } from "./app.js";
 
 type OrderStatus = "placed" | "confirmed" | "preparing" | "served";
 

@@ -1,4 +1,4 @@
-import { assertSupabaseAdmin } from "./supabase-admin";
+import { assertSupabaseAdmin } from "./supabase-admin.js";
 import { randomUUID } from "crypto";
 
 type MenuOptionValue = {

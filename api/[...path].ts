@@ -1,5 +1,5 @@
-import { createApp } from "../server/app";
-import { buildApiRouter } from "../server/routes";
+import { createApp } from "../server/app.js";
+import { buildApiRouter } from "../server/routes.js";
 
 const app = createApp();
 // Support both direct "/health" and prefixed "/api/health" style paths.

@@ -1,16 +1,16 @@
 import { Router, type Express, type RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { randomUUID } from "crypto";
-import { insertUserSchema } from "../shared/schema";
-import { storage } from "./storage";
-import { HttpError } from "./errors";
+import { insertUserSchema } from "../shared/schema.js";
+import { storage } from "./storage.js";
+import { HttpError } from "./errors.js";
 import {
   getWebPushPublicKey,
   removePushSubscription,
   startOrderPushTracking,
   type PushSubscriptionPayload,
   upsertPushSubscription,
-} from "./push";
+} from "./push.js";
 import {
   createAdminQrCode,
   deleteAdminQrCode,
@@ -36,7 +36,7 @@ import {
   updateManagerMenuItem,
   updateManagerTableAvailability,
   updateOrderStatusFromManager,
-} from "./supabase-data";
+} from "./supabase-data.js";
 
 type AsyncRouteHandler = (
   ...args: Parameters<RequestHandler>

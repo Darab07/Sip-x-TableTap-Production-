@@ -1,4 +1,4 @@
-import { type User, type InsertUser } from "../shared/schema";
+import { type User, type InsertUser } from "../shared/schema.js";
 import { randomUUID } from "crypto";
 
 // --- Domain types for TableTap multi-user table sessions and carts ---
