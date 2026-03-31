@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { log } from "./vite";
+import { log } from "./app";
 
 type OrderStatus = "placed" | "confirmed" | "preparing" | "served";
 
