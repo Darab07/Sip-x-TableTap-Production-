@@ -9,12 +9,41 @@ const apiFetch = (input: RequestInfo | URL, init?: RequestInit) => {
   });
 };
 
+const summarizeBody = (raw: string, max = 180) => {
+  const compact = raw.replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
+};
+
 const readJson = async <T>(res: Response): Promise<T> => {
+  const clone = res.clone();
+
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || `Request failed (${res.status})`);
+    try {
+      const body = (await res.json()) as { message?: string };
+      throw new Error(body.message || `Request failed (${res.status})`);
+    } catch {
+      const rawBody = await clone.text().catch(() => "");
+      const preview = summarizeBody(rawBody);
+      const message = preview
+        ? `Request failed (${res.status}): ${preview}`
+        : `Request failed (${res.status})`;
+      throw new Error(message);
+    }
   }
-  return res.json() as Promise<T>;
+
+  try {
+    return (await res.json()) as T;
+  } catch {
+    const rawBody = await clone.text().catch(() => "");
+    const preview = summarizeBody(rawBody);
+    const detail = preview
+      ? ` Response starts with: ${preview}`
+      : "";
+    throw new Error(
+      `API returned non-JSON response (${res.status}).${detail}`,
+    );
+  }
 };
 
 export type MenuCatalogApiResponse = {

@@ -657,13 +657,17 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       } catch (error) {
         if (!isMounted) return;
         console.warn("Table access sync failed:", error);
+        const reason =
+          error instanceof Error && error.message
+            ? error.message
+            : "Unknown error while verifying table access.";
         setTableAccess({
           tableNumber: tableNumberNumeric,
           tableLabel: `Table${tableNumberNumeric}`,
           tableStatus: "unknown",
           hasQrCode: false,
           orderingEnabled: false,
-          message: "Unable to verify this table right now.",
+          message: `Unable to verify table access: ${reason}`,
         });
       } finally {
         inFlight = false;
