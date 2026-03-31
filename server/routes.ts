@@ -1,7 +1,7 @@
 import { Router, type Express, type RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { randomUUID } from "crypto";
-import { insertUserSchema } from "@shared/schema";
+import { insertUserSchema } from "../shared/schema";
 import { storage } from "./storage";
 import { HttpError } from "./errors";
 import {
