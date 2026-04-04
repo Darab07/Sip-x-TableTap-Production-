@@ -44,7 +44,7 @@ export function SectionCards() {
     <div className="*:data-[slot=card]:shadow-xs grid grid-cols-1 gap-4 md:grid-cols-3 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card dark:*:data-[slot=card]:bg-card">
       <Card className="@container/card">
         <CardHeader className="relative pr-20">
-          <CardDescription>Total sales through TableTap</CardDescription>
+          <CardDescription>Total sales</CardDescription>
           <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
             Rs. {cards.totalSales.toLocaleString("en-PK")}
           </CardTitle>

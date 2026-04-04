@@ -32,6 +32,13 @@ const AppRouter = () => {
   const hasAdminAccess = isRestaurantAuthenticated("admin");
   const hasManagerViewAccess = hasManagerAccess || hasOwnerAccess;
 
+  React.useEffect(() => {
+    if (!location.startsWith("/restaurant")) return;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [location]);
+
   return (
     <AnimatePresence mode="wait">
       <Switch location={location} key={location}>
@@ -43,7 +50,7 @@ const AppRouter = () => {
         <Route path="/restaurant/dashboard">
           {() =>
             hasOwnerAccess ? (
-              <RestaurantDashboard />
+              <RestaurantDashboard dashboardRole="owner" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -51,7 +58,7 @@ const AppRouter = () => {
         <Route path="/restaurant/menu-insights">
           {() =>
             hasOwnerAccess ? (
-              <RestaurantMenuInsights />
+              <RestaurantMenuInsights dashboardRole="owner" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -59,7 +66,7 @@ const AppRouter = () => {
         <Route path="/restaurant/orders">
           {() =>
             hasOwnerAccess ? (
-              <RestaurantOrders />
+              <RestaurantOrders dashboardRole="owner" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -67,7 +74,7 @@ const AppRouter = () => {
         <Route path="/restaurant/table-management">
           {() =>
             hasOwnerAccess ? (
-              <RestaurantTableManagement />
+              <RestaurantTableManagement dashboardRole="owner" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -155,7 +162,7 @@ const AppRouter = () => {
         <Route path="/restaurant/admin/dashboard">
           {() =>
             hasAdminAccess ? (
-              <RestaurantDashboard />
+              <RestaurantDashboard dashboardRole="admin" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -163,7 +170,7 @@ const AppRouter = () => {
         <Route path="/restaurant/admin/menu-insights">
           {() =>
             hasAdminAccess ? (
-              <RestaurantMenuInsights />
+              <RestaurantMenuInsights dashboardRole="admin" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -171,7 +178,7 @@ const AppRouter = () => {
         <Route path="/restaurant/admin/orders">
           {() =>
             hasAdminAccess ? (
-              <RestaurantOrders />
+              <RestaurantOrders dashboardRole="admin" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -179,7 +186,7 @@ const AppRouter = () => {
         <Route path="/restaurant/admin/table-management">
           {() =>
             hasAdminAccess ? (
-              <RestaurantTableManagement />
+              <RestaurantTableManagement dashboardRole="admin" />
             ) : (
               <Redirect to="/restaurant" />
             )}
@@ -236,5 +243,6 @@ const AppRouter = () => {
 };
 
 export default AppRouter;
+
 
 

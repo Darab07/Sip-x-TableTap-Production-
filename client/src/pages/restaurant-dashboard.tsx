@@ -8,7 +8,13 @@ import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { fetchOwnerTopItems } from "@/lib/tabletap-supabase-api";
 
-export default function RestaurantDashboard() {
+type RestaurantDashboardProps = {
+  dashboardRole?: "owner" | "manager" | "admin";
+};
+
+export default function RestaurantDashboard({
+  dashboardRole,
+}: RestaurantDashboardProps) {
   const [rows, setRows] = React.useState<z.infer<typeof schema>[]>([]);
 
   React.useEffect(() => {
@@ -45,7 +51,7 @@ export default function RestaurantDashboard() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant="inset" />
+      <AppSidebar variant="inset" dashboardRole={dashboardRole} />
       <SidebarInset>
         <SiteHeader title="Dashboard" />
         <div className="flex flex-1 flex-col">

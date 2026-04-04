@@ -6,7 +6,13 @@ import { OrdersTrendChart } from "@/components/orders-trend-chart";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
-export default function RestaurantOrders() {
+type RestaurantOrdersProps = {
+  dashboardRole?: "owner" | "manager" | "admin";
+};
+
+export default function RestaurantOrders({
+  dashboardRole,
+}: RestaurantOrdersProps) {
   return (
     <SidebarProvider
       style={
@@ -16,7 +22,7 @@ export default function RestaurantOrders() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant="inset" />
+      <AppSidebar variant="inset" dashboardRole={dashboardRole} />
       <SidebarInset>
         <SiteHeader title="Orders" />
         <div className="flex flex-1 flex-col">

@@ -6,7 +6,13 @@ import { TableManagementOverview } from "@/components/table-management-overview"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { fetchOwnerTableManagement } from "@/lib/tabletap-supabase-api";
 
-export default function RestaurantTableManagement() {
+type RestaurantTableManagementProps = {
+  dashboardRole?: "owner" | "manager" | "admin";
+};
+
+export default function RestaurantTableManagement({
+  dashboardRole,
+}: RestaurantTableManagementProps) {
   const [snapshot, setSnapshot] = React.useState<{
     cards: {
       totalTables: number;
@@ -82,7 +88,7 @@ export default function RestaurantTableManagement() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant="inset" />
+      <AppSidebar variant="inset" dashboardRole={dashboardRole} />
       <SidebarInset>
         <SiteHeader title="Table Management" />
         <div className="flex flex-1 flex-col">

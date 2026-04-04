@@ -640,6 +640,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return localStorage.getItem(ACCOUNT_EMAIL_KEY)?.trim().toLowerCase() || "";
   });
   const [accountSaveError, setAccountSaveError] = useState<string | null>(null);
+  const [pendingCartOpenAfterProfile, setPendingCartOpenAfterProfile] = useState(false);
   const [remoteCatalog, setRemoteCatalog] =
     useState<MenuCatalogApiResponse | null>(null);
   const [tableAccess, setTableAccess] = useState<{
@@ -972,6 +973,18 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   const ensureCartAuth = () => {
     return true;
+  };
+
+  const isProfileCompleteForCart = () => {
+    const normalizedName = displayName.trim();
+    const normalizedEmail = accountEmail.trim().toLowerCase();
+    const defaultName = getDefaultDisplayName(userId).trim().toLowerCase();
+    const hasCustomName =
+      normalizedName.length > 0 && normalizedName.toLowerCase() !== defaultName;
+    const hasValidEmail =
+      normalizedEmail.length > 0 &&
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
+    return hasCustomName && hasValidEmail;
   };
 
   const showCustomerWaiterBanner = () => {
@@ -1680,7 +1693,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
       return priceEntries
         .map((entry) => `${entry.option} Rs.${entry.price.toLocaleString()}/-`)
-        .join(" • ");
+        .join(" â€¢ ");
     }
 
     const basePrice = getBaseItemPrice(item, null);
@@ -2409,11 +2422,36 @@ useEffect(() => {
     if (!showPastOrdersModal) return;
     void loadPastOrdersFromServer();
   }, [showPastOrdersModal]);
-  const openAccountDrawer = () => {
+  const openAccountDrawer = (
+    options?: { errorMessage?: string | null; keepPendingCartOpen?: boolean },
+  ) => {
     setDisplayNameDraft(displayName);
     setAccountEmailDraft(accountEmail);
-    setAccountSaveError(null);
+    setAccountSaveError(options?.errorMessage ?? null);
+    if (!options?.keepPendingCartOpen) {
+      setPendingCartOpenAfterProfile(false);
+    }
     setShowAccountDrawer(true);
+  };
+
+  const closeAccountDrawer = () => {
+    setShowAccountDrawer(false);
+    setPendingCartOpenAfterProfile(false);
+  };
+
+  const openCartWithProfileGuard = () => {
+    if (!ensureOrderingEnabled()) return;
+
+    if (isProfileCompleteForCart()) {
+      setShowCart(true);
+      return;
+    }
+
+    setPendingCartOpenAfterProfile(true);
+    openAccountDrawer({
+      errorMessage: "Please add your name and email before viewing cart.",
+      keepPendingCartOpen: true,
+    });
   };
 
   const handleSaveAccountProfile = async () => {
@@ -2452,6 +2490,10 @@ useEffect(() => {
         return;
       }
       setShowAccountDrawer(false);
+      if (pendingCartOpenAfterProfile) {
+        setPendingCartOpenAfterProfile(false);
+        setShowCart(true);
+      }
     } catch (error) {
       setAccountSaveError(
         error instanceof Error
@@ -3142,7 +3184,7 @@ useEffect(() => {
             <p className="text-xs text-gray-500 subtext-font">{accountEmail || "Add name and email"}</p>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={openAccountDrawer} className="cursor-pointer">
+          <DropdownMenuItem onClick={() => openAccountDrawer()} className="cursor-pointer">
             <Pencil size={16} />
             <span className="heading-font">Account</span>
           </DropdownMenuItem>
@@ -3376,7 +3418,7 @@ useEffect(() => {
                     type="button"
                     onClick={() => {
                       setShowSidebarMenu(false);
-                      setShowCart(true);
+                      openCartWithProfileGuard();
                     }}
                     className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
                   >
@@ -3436,7 +3478,7 @@ useEffect(() => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAccountDrawer(false)}
+              onClick={closeAccountDrawer}
               aria-label="Close account drawer"
             />
             <motion.div
@@ -3456,7 +3498,7 @@ useEffect(() => {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowAccountDrawer(false)}
+                    onClick={closeAccountDrawer}
                     className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100"
                     aria-label="Close account drawer"
                   >
@@ -3506,7 +3548,7 @@ useEffect(() => {
                   <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setShowAccountDrawer(false)}
+                      onClick={closeAccountDrawer}
                       className="w-1/2 rounded-2xl border border-gray-300 px-4 py-3 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 heading-font"
                     >
                       Cancel
@@ -4049,8 +4091,7 @@ useEffect(() => {
         >
           <button
             onClick={() => {
-              if (!ensureOrderingEnabled()) return;
-              setShowCart(true);
+              openCartWithProfileGuard();
             }}
             className="w-full flex items-center justify-between rounded-full bg-black text-white px-5 py-3 shadow-lg transition-colors hover:bg-gray-900 heading-font"
           >
@@ -4636,7 +4677,7 @@ useEffect(() => {
                         : "bg-black text-white"
                     }`}
                   >
-                    Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
+                    Add {itemQuantity + selectedSuggestedItems.length} to order â€¢ Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
                   </button>
                 </div>
               </div>
@@ -4956,7 +4997,7 @@ useEffect(() => {
                           <p className="mt-0.5 text-xs text-gray-500 subtext-font">
                             {order.tableLabel}
                             {order.placedAt
-                              ? ` • ${new Date(order.placedAt).toLocaleString()}`
+                              ? ` â€¢ ${new Date(order.placedAt).toLocaleString()}`
                               : ""}
                           </p>
                         </div>
@@ -5372,21 +5413,3 @@ useEffect(() => {
     </motion.div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

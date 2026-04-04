@@ -4,7 +4,13 @@ import { MenuInsightsOverview } from "@/components/menu-insights-overview";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
-export default function RestaurantMenuInsights() {
+type RestaurantMenuInsightsProps = {
+  dashboardRole?: "owner" | "manager" | "admin";
+};
+
+export default function RestaurantMenuInsights({
+  dashboardRole,
+}: RestaurantMenuInsightsProps) {
   return (
     <SidebarProvider
       style={
@@ -14,7 +20,7 @@ export default function RestaurantMenuInsights() {
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant="inset" />
+      <AppSidebar variant="inset" dashboardRole={dashboardRole} />
       <SidebarInset>
         <SiteHeader title="Menu Insights" />
         <div className="flex flex-1 flex-col">
