@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+﻿import { ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
@@ -20,7 +20,7 @@ export default function Home() {
   const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
 
   const handleOrderNow = () => {
-    setLocation(`/menu${tableQuery}`); // Use dynamic table identifier
+    setLocation(`/sip/menu${tableQuery}`); // Use dynamic table identifier
   };
 
   return (
@@ -97,3 +97,4 @@ export default function Home() {
     </motion.div>
   );
 }
+

@@ -22,7 +22,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 
-type TableStatus = "Available" | "Occupied" | "Unavailable"
+type TableStatus = "Available" | "Occupied" | "Served" | "Unavailable"
 type TableFilter = "all" | "available" | "occupied" | "unavailable"
 type ViewMode = "grid" | "list"
 type SortMode = "newest" | "oldest"
@@ -67,11 +67,15 @@ const getStatusBadgeClass = (status: TableStatus) => {
     return "border-amber-200 bg-amber-50 text-amber-700"
   }
 
+  if (status === "Served") {
+    return "border-blue-200 bg-blue-50 text-blue-700"
+  }
+
   return "border-red-200 bg-red-50 text-red-700"
 }
 
 const getOrderBadgeClass = (status: string) => {
-  if (status === "Served") {
+  if (status === "Served" || status === "Ready") {
     return "border-green-200 bg-green-50 text-green-700"
   }
 
@@ -114,10 +118,7 @@ export function TableManagementOverview({ tables }: TableManagementOverviewProps
       tables.map((table) => ({
         id: table.id,
         tableName: table.tableNumber.replace("T-", "Table "),
-        currentStatus:
-          table.status === "Served"
-            ? "Occupied"
-            : (table.status as TableStatus),
+        currentStatus: table.status as TableStatus,
         totalBill: table.billTotal,
         sessionStartedAt: table.startedAt,
         orderStatus: table.orderStatus,
@@ -327,3 +328,4 @@ export function TableManagementOverview({ tables }: TableManagementOverviewProps
     </Card>
   )
 }
+

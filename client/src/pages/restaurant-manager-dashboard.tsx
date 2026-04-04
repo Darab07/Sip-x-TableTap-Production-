@@ -19,32 +19,28 @@ import {
   updateManagerOrderStatus,
 } from "@/lib/tabletap-supabase-api";
 
-type OrderStatus = "new" | "accepted" | "preparing" | "completed";
-const CLEARED_COMPLETED_ORDERS_KEY = "tabletap_cleared_completed_live_orders";
+type OrderStatus = "new" | "accepted" | "preparing" | "ready";
+const CLEARED_READY_ORDERS_KEY = "tabletap_cleared_ready_live_orders";
 
 type LiveOrder = {
   id: string;
+  orderNumber: string;
   tableNumber: string;
   placedAt: string;
   orderedItems: string[];
   hasOrderNotes: boolean;
   orderNotes: string;
   status: OrderStatus;
-  readyToServe: boolean;
 };
 
 const kanbanColumns: { value: OrderStatus; label: string }[] = [
   { value: "new", label: "New" },
   { value: "accepted", label: "Accepted" },
   { value: "preparing", label: "Preparing" },
-  { value: "completed", label: "Completed" },
+  { value: "ready", label: "Ready" },
 ];
 
 const getVisibleStatusLabel = (order: LiveOrder) => {
-  if (order.status === "preparing" && order.readyToServe) {
-    return "Ready";
-  }
-
   if (order.status === "new") {
     return "New";
   }
@@ -57,7 +53,7 @@ const getVisibleStatusLabel = (order: LiveOrder) => {
     return "Preparing";
   }
 
-  return "Completed";
+  return "Ready";
 };
 
 const getStatusBadgeClass = (order: LiveOrder) => {
@@ -69,15 +65,11 @@ const getStatusBadgeClass = (order: LiveOrder) => {
     return "border-amber-200 bg-amber-50 text-amber-700";
   }
 
-  if (order.status === "preparing" && order.readyToServe) {
-    return "border-green-200 bg-green-50 text-green-700";
-  }
-
   if (order.status === "preparing") {
     return "border-violet-200 bg-violet-50 text-violet-700";
   }
 
-  return "border-slate-200 bg-slate-50 text-slate-700";
+  return "border-green-200 bg-green-50 text-green-700";
 };
 
 type RestaurantManagerDashboardProps = {
@@ -90,10 +82,16 @@ export default function RestaurantManagerDashboard({
   const [location] = useLocation();
   const [orders, setOrders] = React.useState<LiveOrder[]>([]);
   const [isSyncingOrders, setIsSyncingOrders] = React.useState(false);
+  const [statusUpdateError, setStatusUpdateError] = React.useState<string | null>(
+    null
+  );
+  const [updatingOrderId, setUpdatingOrderId] = React.useState<string | null>(
+    null
+  );
   const [selectedOrderId, setSelectedOrderId] = React.useState<string | null>(
     null
   );
-  const [clearedCompletedOrderIds, setClearedCompletedOrderIds] = React.useState<
+  const [clearedReadyOrderIds, setClearedReadyOrderIds] = React.useState<
     Set<string>
   >(() => {
     if (typeof window === "undefined") {
@@ -101,7 +99,7 @@ export default function RestaurantManagerDashboard({
     }
 
     try {
-      const raw = window.localStorage.getItem(CLEARED_COMPLETED_ORDERS_KEY);
+      const raw = window.localStorage.getItem(CLEARED_READY_ORDERS_KEY);
       if (!raw) {
         return new Set<string>();
       }
@@ -130,13 +128,13 @@ export default function RestaurantManagerDashboard({
 
   const mapApiOrder = (order: ManagerLiveOrder): LiveOrder => ({
     id: order.orderNumber,
+    orderNumber: order.orderNumber,
     tableNumber: order.tableNumber,
     placedAt: order.placedAt,
     orderedItems: order.orderedItems,
     hasOrderNotes: order.hasOrderNotes,
     orderNotes: order.orderNotes,
     status: order.status,
-    readyToServe: order.readyToServe,
   });
 
   const syncOrders = React.useCallback(async () => {
@@ -150,8 +148,8 @@ export default function RestaurantManagerDashboard({
             .filter(
               (order) =>
                 !(
-                  order.status === "completed" &&
-                  clearedCompletedOrderIds.has(order.id)
+                  order.status === "ready" &&
+                  clearedReadyOrderIds.has(order.id)
                 )
             )
         );
@@ -161,7 +159,35 @@ export default function RestaurantManagerDashboard({
     } finally {
       setIsSyncingOrders(false);
     }
-  }, [clearedCompletedOrderIds]);
+  }, [clearedReadyOrderIds]);
+
+  const transitionOrderStatus = React.useCallback(
+    async (
+      order: LiveOrder,
+      nextStatus: Extract<OrderStatus, "accepted" | "preparing" | "ready">
+    ) => {
+      const previousStatus = order.status;
+      setStatusUpdateError(null);
+      setUpdatingOrderId(order.id);
+      updateOrder(order.id, { status: nextStatus });
+      try {
+        await updateManagerOrderStatus(order.orderNumber, nextStatus);
+        await syncOrders();
+      } catch (error) {
+        updateOrder(order.id, { status: previousStatus });
+        const reason =
+          error instanceof Error ? error.message : "Unknown server error";
+        setStatusUpdateError(
+          `Unable to move ${order.orderNumber} to ${nextStatus}: ${reason}`
+        );
+        console.warn("Unable to persist order status:", error);
+      } finally {
+        setUpdatingOrderId((current) => (current === order.id ? null : current));
+      }
+    },
+    [syncOrders]
+  );
+
 
   const ordersByStatus = (status: OrderStatus) =>
     orders
@@ -171,24 +197,24 @@ export default function RestaurantManagerDashboard({
           new Date(b.placedAt).getTime() - new Date(a.placedAt).getTime()
       );
 
-  const clearCompletedOrders = React.useCallback(() => {
-    const completedIds = orders
-      .filter((order) => order.status === "completed")
+  const clearReadyOrders = React.useCallback(() => {
+    const readyIds = orders
+      .filter((order) => order.status === "ready")
       .map((order) => order.id);
 
-    if (completedIds.length === 0) {
+    if (readyIds.length === 0) {
       return;
     }
 
-    setOrders((current) => current.filter((order) => order.status !== "completed"));
+    setOrders((current) => current.filter((order) => order.status !== "ready"));
     setSelectedOrderId((current) =>
-      current !== null && completedIds.includes(current) ? null : current
+      current !== null && readyIds.includes(current) ? null : current
     );
-    setClearedCompletedOrderIds((current) => {
+    setClearedReadyOrderIds((current) => {
       const next = new Set(current);
-      completedIds.forEach((id) => next.add(id));
+      readyIds.forEach((id) => next.add(id));
       window.localStorage.setItem(
-        CLEARED_COMPLETED_ORDERS_KEY,
+        CLEARED_READY_ORDERS_KEY,
         JSON.stringify(Array.from(next))
       );
       return next;
@@ -196,20 +222,18 @@ export default function RestaurantManagerDashboard({
   }, [orders]);
 
   const renderPrimaryAction = (order: LiveOrder) => {
+    const isUpdating = updatingOrderId === order.id;
     if (order.status === "new") {
       return (
         <Button
           size="sm"
-          onClick={async () => {
-            updateOrder(order.id, { status: "accepted", readyToServe: false });
-            try {
-              await updateManagerOrderStatus(order.id, "accepted");
-            } catch (error) {
-              console.warn("Unable to persist order status:", error);
-            }
+          className="h-8 px-2 text-xs md:h-7 md:text-[11px]"
+          disabled={isUpdating}
+          onClick={() => {
+            void transitionOrderStatus(order, "accepted");
           }}
         >
-          Accept
+          {isUpdating ? "Saving..." : "Accept"}
         </Button>
       );
     }
@@ -218,52 +242,28 @@ export default function RestaurantManagerDashboard({
       return (
         <Button
           size="sm"
-          onClick={async () => {
-            updateOrder(order.id, { status: "preparing", readyToServe: false });
-            try {
-              await updateManagerOrderStatus(order.id, "preparing");
-            } catch (error) {
-              console.warn("Unable to persist order status:", error);
-            }
+          className="h-8 px-2 text-xs md:h-7 md:text-[11px]"
+          disabled={isUpdating}
+          onClick={() => {
+            void transitionOrderStatus(order, "preparing");
           }}
         >
-          Mark Preparing
+          {isUpdating ? "Saving..." : "Mark Preparing"}
         </Button>
       );
     }
 
-    if (order.status === "preparing" && !order.readyToServe) {
+    if (order.status === "preparing") {
       return (
         <Button
           size="sm"
-          onClick={async () => {
-            updateOrder(order.id, { readyToServe: true });
-            try {
-              await updateManagerOrderStatus(order.id, "ready");
-            } catch (error) {
-              console.warn("Unable to persist order status:", error);
-            }
+          className="h-8 px-2 text-xs md:h-7 md:text-[11px]"
+          disabled={isUpdating}
+          onClick={() => {
+            void transitionOrderStatus(order, "ready");
           }}
         >
-          Mark Ready
-        </Button>
-      );
-    }
-
-    if (order.status === "preparing" && order.readyToServe) {
-      return (
-        <Button
-          size="sm"
-          onClick={async () => {
-            updateOrder(order.id, { status: "completed", readyToServe: false });
-            try {
-              await updateManagerOrderStatus(order.id, "completed");
-            } catch (error) {
-              console.warn("Unable to persist order status:", error);
-            }
-          }}
-        >
-          Mark Served / Completed
+          {isUpdating ? "Saving..." : "Mark Ready"}
         </Button>
       );
     }
@@ -330,29 +330,34 @@ export default function RestaurantManagerDashboard({
           }
         />
         <ManagerWaiterAlertOverlay />
-        <div className="flex flex-1 flex-col">
+        <div className="flex flex-1 flex-col overflow-x-hidden">
           <div className="@container/main flex flex-1 flex-col gap-2">
             <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
-              <div className="px-4 lg:px-6">
-                <div className="flex gap-4 overflow-x-auto pb-2">
+              <div className="mx-auto w-full max-w-[1600px] px-2 sm:px-3 md:px-3 lg:px-5">
+                {statusUpdateError ? (
+                  <p className="mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {statusUpdateError}
+                  </p>
+                ) : null}
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4 md:gap-2 xl:gap-3">
                 {kanbanColumns.map((column) => {
                   const columnOrders = ordersByStatus(column.value);
 
                   return (
                     <div
                       key={column.value}
-                      className="w-64 min-w-64 flex-shrink-0 space-y-3"
+                      className="min-w-0 space-y-2"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <h2 className="text-sm font-semibold">{column.label}</h2>
+                        <h2 className="text-sm font-semibold md:text-xs xl:text-sm">{column.label}</h2>
                         <div className="flex items-center gap-1.5">
-                          {column.value === "completed" ? (
+                          {column.value === "ready" ? (
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="h-6 px-2 text-[11px]"
+                              className="h-6 px-1.5 text-[10px] xl:px-2 xl:text-[11px]"
                               disabled={columnOrders.length === 0}
-                              onClick={clearCompletedOrders}
+                              onClick={clearReadyOrders}
                             >
                               Clear
                             </Button>
@@ -366,19 +371,19 @@ export default function RestaurantManagerDashboard({
                         </div>
                       </div>
                       {columnOrders.length === 0 ? (
-                        <div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">
+                        <div className="rounded-lg border border-dashed bg-muted/20 p-5 text-center text-sm text-muted-foreground">
                           No orders in this lane.
                         </div>
                       ) : (
                         columnOrders.map((order) => (
-                          <div key={order.id} className="rounded-lg border p-3">
+                          <div key={order.orderNumber} className="rounded-lg border bg-card p-2.5 md:p-2 xl:p-2.5">
                             <div className="flex items-start justify-between gap-3">
                               <div>
-                                <p className="text-sm font-semibold">
+                                <p className="text-[13px] font-semibold md:text-xs xl:text-sm">
                                   Table {order.tableNumber}
                                 </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {order.id}
+                                <p className="break-all text-[11px] text-muted-foreground">
+                                  {order.orderNumber}
                                 </p>
                               </div>
                               <Badge
@@ -391,14 +396,14 @@ export default function RestaurantManagerDashboard({
 
                             <div className="mt-3 grid grid-cols-2 gap-3">
                               <div className="col-span-2">
-                                <p className="text-xs text-muted-foreground">
+                                <p className="break-all text-[11px] text-muted-foreground">
                                   Items ordered
                                 </p>
                                 <ul className="mt-1 space-y-1">
                                   {order.orderedItems.map((item) => (
                                     <li
                                       key={item}
-                                      className="text-sm font-medium"
+                                      className="break-words text-[13px] font-medium md:text-xs xl:text-sm"
                                     >
                                       {item}
                                     </li>
@@ -407,21 +412,22 @@ export default function RestaurantManagerDashboard({
                               </div>
                               {order.hasOrderNotes ? (
                                 <div className="col-span-2">
-                                  <p className="text-xs text-muted-foreground">
+                                  <p className="break-all text-[11px] text-muted-foreground">
                                     Order notes
                                   </p>
-                                  <p className="text-sm font-medium text-slate-700">
+                                  <p className="break-words text-[13px] font-medium text-slate-700 md:text-xs xl:text-sm">
                                     {order.orderNotes}
                                   </p>
                                 </div>
                               ) : null}
                             </div>
 
-                            <div className="mt-3 flex flex-wrap gap-2">
+                            <div className="mt-2 flex flex-wrap gap-1.5">
                               {renderPrimaryAction(order)}
                               <Button
                                 size="sm"
                                 variant="outline"
+                                className="h-8 px-2 text-xs md:h-7 md:text-[11px]"
                                 onClick={() => setSelectedOrderId(order.id)}
                               >
                                 View full details
@@ -459,7 +465,7 @@ export default function RestaurantManagerDashboard({
             <div className="space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-2">
                 <p className="text-muted-foreground">Order ID</p>
-                <p className="font-medium">{selectedOrder.id}</p>
+                <p className="font-medium">{selectedOrder.orderNumber}</p>
                 <p className="text-muted-foreground">Table number</p>
                 <p className="font-medium">{selectedOrder.tableNumber}</p>
                 <p className="text-muted-foreground">Current status</p>
@@ -490,3 +496,10 @@ export default function RestaurantManagerDashboard({
     </SidebarProvider>
   );
 }
+
+
+
+
+
+
+

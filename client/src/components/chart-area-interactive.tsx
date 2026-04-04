@@ -38,24 +38,47 @@ export function ChartAreaInteractive() {
   const [remoteTrend, setRemoteTrend] = React.useState<Array<{ date: string; sales: number }>>([])
 
   React.useEffect(() => {
-    let mounted = true
+    let cancelled = false
+    let inFlight = false
     const rangeDays = timeRange === "7d" ? 7 : timeRange === "14d" ? 14 : 30
-    fetchOwnerSalesTrend("f7-islamabad", rangeDays)
-      .then((response) => {
-        if (!mounted) return
+
+    const load = async () => {
+      if (cancelled || inFlight) return
+      if (typeof document !== "undefined" && document.hidden) return
+      inFlight = true
+      try {
+        const response = await fetchOwnerSalesTrend("f7-islamabad", rangeDays)
+        if (cancelled) return
         setRemoteTrend(
           response.points.map((point) => ({
             date: point.date,
             sales: point.sales,
           }))
         )
-      })
-      .catch((error) => {
-        console.warn("Sales trend sync failed:", error)
-      })
+      } catch (error) {
+        if (!cancelled) {
+          console.warn("Sales trend sync failed:", error)
+        }
+      } finally {
+        inFlight = false
+      }
+    }
+
+    void load()
+    const timer = window.setInterval(() => {
+      void load()
+    }, 15000)
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        void load()
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
 
     return () => {
-      mounted = false
+      cancelled = true
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
     }
   }, [timeRange])
 
@@ -86,7 +109,7 @@ export function ChartAreaInteractive() {
 
   return (
     <Card className="@container/card">
-      <CardHeader className="gap-3">
+      <CardHeader className="gap-3 pb-2">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
             <CardTitle>Sales Trend</CardTitle>
@@ -149,7 +172,7 @@ export function ChartAreaInteractive() {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="px-2 pt-2 sm:px-6 sm:pt-4">
+      <CardContent className="px-1 pt-2 sm:px-6 sm:pt-4">
         <ChartContainer
           config={chartConfig}
           className="aspect-auto h-[260px] w-full"

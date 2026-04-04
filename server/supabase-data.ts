@@ -322,6 +322,8 @@ export type PlaceOrderInput = {
   branchCode?: string;
   tableNumber: number;
   deviceFingerprint?: string;
+  customerName?: string;
+  customerEmail?: string;
   notes?: string;
   tipAmount?: number;
   serviceFee?: number;
@@ -335,7 +337,7 @@ export type PlacedOrderResponse = {
   id: string;
   orderNumber: string;
   tableLabel: string;
-  status: "placed" | "confirmed" | "preparing" | "served";
+  status: "placed" | "confirmed" | "preparing" | "ready" | "served";
   subtotal: number;
   tipAmount: number;
   serviceFee: number;
@@ -352,6 +354,29 @@ export type PlacedOrderResponse = {
 
 const sanitizeMoney = (value: number | undefined) =>
   Math.max(0, Math.round(Number(value || 0)));
+const ORDER_DEDUP_WINDOW_MS = 10_000;
+
+const normalizeOrderNotes = (value?: string | null) =>
+  String(value ?? "").trim();
+
+const toOrderItemsSignature = (
+  items: Array<{
+    name: string;
+    quantity: number;
+    price: number;
+    details?: string | null;
+  }>,
+) =>
+  items
+    .map((item) => {
+      const name = String(item.name ?? "").trim().toLowerCase();
+      const quantity = Math.max(1, Math.round(Number(item.quantity || 1)));
+      const price = sanitizeMoney(Number(item.price || 0));
+      const details = String(item.details ?? "").trim().toLowerCase();
+      return `${name}|${quantity}|${price}|${details}`;
+    })
+    .sort()
+    .join("||");
 
 const normalizeMenuLookupKey = (value: string) => {
   const trimmed = value.trim().toLowerCase();
@@ -361,7 +386,8 @@ const normalizeMenuLookupKey = (value: string) => {
 
 const toCustomerTrackerStatus = (status: string) => {
   if (status === "confirmed" || status === "accepted") return "confirmed";
-  if (status === "preparing" || status === "ready") return "preparing";
+  if (status === "preparing") return "preparing";
+  if (status === "ready") return "ready";
   if (status === "served" || status === "completed") return "served";
   return "placed";
 };
@@ -370,15 +396,14 @@ const ensureDevice = async (deviceFingerprint?: string) => {
   if (!deviceFingerprint) return null;
   const supabase = assertSupabaseAdmin();
 
+  const upsertBase = {
+    device_fingerprint: deviceFingerprint,
+    last_seen_at: new Date().toISOString(),
+  };
+
   const { data, error } = await supabase
     .from("customer_devices")
-    .upsert(
-      {
-        device_fingerprint: deviceFingerprint,
-        last_seen_at: new Date().toISOString(),
-      },
-      { onConflict: "device_fingerprint" },
-    )
+    .upsert(upsertBase, { onConflict: "device_fingerprint" })
     .select("id")
     .single<{ id: string }>();
 
@@ -386,6 +411,78 @@ const ensureDevice = async (deviceFingerprint?: string) => {
     throw new Error(error.message);
   }
   return data?.id ?? null;
+};
+
+const saveDeviceProfile = async (
+  deviceFingerprint: string,
+  input: { name?: string; email?: string },
+) => {
+  const supabase = assertSupabaseAdmin();
+  const normalizedName = String(input.name ?? "").trim().slice(0, 64);
+  const normalizedEmail = String(input.email ?? "").trim().toLowerCase().slice(0, 255);
+
+  const fullPayload = {
+    device_fingerprint: deviceFingerprint,
+    display_name: normalizedName || null,
+    email: normalizedEmail || null,
+    last_seen_at: new Date().toISOString(),
+  };
+
+  const firstTry = await supabase
+    .from("customer_devices")
+    .upsert(fullPayload, { onConflict: "device_fingerprint" });
+  if (!firstTry.error) {
+    return { saved: true };
+  }
+
+  // Backward-compatible fallback if display_name/email columns are not present yet.
+  const fallback = await supabase
+    .from("customer_devices")
+    .upsert(
+      {
+        device_fingerprint: deviceFingerprint,
+        last_seen_at: fullPayload.last_seen_at,
+      },
+      { onConflict: "device_fingerprint" },
+    );
+  if (fallback.error) {
+    throw new Error(fallback.error.message);
+  }
+
+  return {
+    saved: false,
+    warning: "Profile columns are missing on customer_devices. Run supabase/04_customer_profile_columns.sql.",
+  };
+};
+
+export const upsertCustomerDeviceProfile = async (input: {
+  deviceFingerprint: string;
+  name: string;
+  email: string;
+}) => {
+  if (!input.deviceFingerprint) {
+    throw new Error("deviceFingerprint is required");
+  }
+  const name = String(input.name ?? "").trim().slice(0, 64);
+  const email = String(input.email ?? "").trim().toLowerCase();
+  if (!name) {
+    throw new Error("name is required");
+  }
+  if (!email) {
+    throw new Error("email is required");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("email is invalid");
+  }
+
+  const result = await saveDeviceProfile(input.deviceFingerprint, { name, email });
+  return {
+    deviceFingerprint: input.deviceFingerprint,
+    name,
+    email,
+    savedToDatabase: result.saved,
+    warning: "warning" in result ? result.warning : undefined,
+  };
 };
 
 const ensureTableAndSession = async (
@@ -623,6 +720,16 @@ export const placeOrderInSupabase = async (
     throw new Error(tableAccess.message);
   }
   const deviceId = await ensureDevice(input.deviceFingerprint);
+  if (input.deviceFingerprint) {
+    try {
+      await saveDeviceProfile(input.deviceFingerprint, {
+        name: input.customerName,
+        email: input.customerEmail,
+      });
+    } catch (error) {
+      console.warn("Customer profile save skipped:", error);
+    }
+  }
   const table = await ensureTableAndSession(outlet.id, tableNumber, {
     autoCreateTable: false,
   });
@@ -717,6 +824,102 @@ export const placeOrderInSupabase = async (
       ? sanitizeMoney(input.total)
       : subtotal + tipAmount + serviceFee + gstAmount;
 
+  const requestedItemsSignature = toOrderItemsSignature(
+    preparedItems.map((item) => ({
+      name: item.row.name,
+      quantity: item.quantity,
+      price: item.unitPrice,
+      details: item.row.details || "",
+    })),
+  );
+
+  const duplicateGuardQuery = await supabase
+    .from("orders")
+    .select(
+      "id,order_number,status,subtotal,tip_amount,service_fee,tax_amount,total_amount,notes,placed_at,customer_device_id,order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+    )
+    .eq("outlet_id", outlet.id)
+    .eq("table_id", table.tableId)
+    .eq("table_session_id", table.tableSessionId)
+    .order("placed_at", { ascending: false })
+    .limit(8);
+
+  if (duplicateGuardQuery.error) {
+    throw new Error(duplicateGuardQuery.error.message);
+  }
+
+  type DuplicateGuardOrderItemRow = {
+    item_name_snapshot: string | null;
+    quantity: number | null;
+    unit_price: number | null;
+    special_instructions: string | null;
+  };
+
+  type DuplicateGuardOrderRow = {
+    id: string;
+    order_number: string;
+    status: string;
+    subtotal: number | null;
+    tip_amount: number | null;
+    service_fee: number | null;
+    tax_amount: number | null;
+    total_amount: number | null;
+    notes: string | null;
+    placed_at: string;
+    customer_device_id: string | null;
+    order_items: DuplicateGuardOrderItemRow[] | null;
+  };
+
+  const nowMs = Date.now();
+  const requestedNotes = normalizeOrderNotes(input.notes);
+
+  const existingDuplicate = (duplicateGuardQuery.data ?? [])
+    .map((row) => row as unknown as DuplicateGuardOrderRow)
+    .find((row) => {
+      const placedAtMs = new Date(row.placed_at).getTime();
+      if (!Number.isFinite(placedAtMs)) return false;
+      if (nowMs - placedAtMs > ORDER_DEDUP_WINDOW_MS) return false;
+      if (deviceId && row.customer_device_id !== deviceId) return false;
+
+      if (sanitizeMoney(Number(row.subtotal ?? 0)) !== subtotal) return false;
+      if (sanitizeMoney(Number(row.tip_amount ?? 0)) !== tipAmount) return false;
+      if (sanitizeMoney(Number(row.service_fee ?? 0)) !== serviceFee) return false;
+      if (sanitizeMoney(Number(row.tax_amount ?? 0)) !== gstAmount) return false;
+      if (sanitizeMoney(Number(row.total_amount ?? 0)) !== total) return false;
+      if (normalizeOrderNotes(row.notes) !== requestedNotes) return false;
+
+      const existingItemsSignature = toOrderItemsSignature(
+        (row.order_items ?? []).map((item) => ({
+          name: String(item.item_name_snapshot ?? ""),
+          quantity: Math.max(1, Math.round(Number(item.quantity || 1))),
+          price: sanitizeMoney(Number(item.unit_price ?? 0)),
+          details: item.special_instructions ?? "",
+        })),
+      );
+
+      return existingItemsSignature === requestedItemsSignature;
+    });
+
+  if (existingDuplicate) {
+    return {
+      id: existingDuplicate.id,
+      orderNumber: existingDuplicate.order_number,
+      tableLabel: table.tableLabel.replace("Table", "Table "),
+      status: toCustomerTrackerStatus(existingDuplicate.status),
+      subtotal: sanitizeMoney(Number(existingDuplicate.subtotal ?? subtotal)),
+      tipAmount: sanitizeMoney(Number(existingDuplicate.tip_amount ?? tipAmount)),
+      serviceFee: sanitizeMoney(Number(existingDuplicate.service_fee ?? serviceFee)),
+      gstAmount: sanitizeMoney(Number(existingDuplicate.tax_amount ?? gstAmount)),
+      total: sanitizeMoney(Number(existingDuplicate.total_amount ?? total)),
+      notes: existingDuplicate.notes || "",
+      items: (existingDuplicate.order_items ?? []).map((item) => ({
+        name: String(item.item_name_snapshot ?? "Item"),
+        quantity: Math.max(1, Math.round(Number(item.quantity || 1))),
+        price: sanitizeMoney(Number(item.unit_price ?? 0)),
+        details: String(item.special_instructions ?? ""),
+      })),
+    };
+  }
   const insertOrder = await supabase
     .from("orders")
     .insert({
@@ -823,14 +1026,13 @@ export type ManagerLiveOrder = {
   orderedItems: string[];
   hasOrderNotes: boolean;
   orderNotes: string;
-  status: "new" | "accepted" | "preparing" | "completed";
-  readyToServe: boolean;
+  status: "new" | "accepted" | "preparing" | "ready";
 };
 
 const toManagerStatus = (status: string): ManagerLiveOrder["status"] => {
   if (status === "accepted" || status === "confirmed") return "accepted";
-  if (status === "preparing" || status === "ready") return "preparing";
-  if (status === "served" || status === "completed") return "completed";
+  if (status === "preparing") return "preparing";
+  if (status === "ready" || status === "served" || status === "completed") return "ready";
   return "new";
 };
 
@@ -888,7 +1090,6 @@ export const getManagerLiveOrders = async (branchCode = DEFAULT_BRANCH) => {
       hasOrderNotes: Boolean(orderNotes),
       orderNotes,
       status: toManagerStatus(typedRow.status),
-      readyToServe: typedRow.status === "ready",
     };
   });
 
@@ -900,12 +1101,11 @@ const managerToDbStatus: Record<string, string> = {
   accepted: "accepted",
   preparing: "preparing",
   ready: "ready",
-  completed: "completed",
 };
 
 export const updateOrderStatusFromManager = async (input: {
   orderNumber: string;
-  status: "accepted" | "preparing" | "ready" | "completed";
+  status: "accepted" | "preparing" | "ready";
 }) => {
   const supabase = assertSupabaseAdmin();
   const dbStatus = managerToDbStatus[input.status];
@@ -913,15 +1113,57 @@ export const updateOrderStatusFromManager = async (input: {
     throw new Error("Invalid status update");
   }
 
-  const { data, error } = await supabase
+  const normalizedLookup = input.orderNumber.trim();
+  if (!normalizedLookup) {
+    throw new Error("Order number is required");
+  }
+
+  const selectCols = "id,order_number,status,placed_at";
+
+  const byOrderNumber = await supabase
     .from("orders")
     .update({ status: dbStatus })
-    .eq("order_number", input.orderNumber)
-    .select("id,order_number,status")
-    .single<{ id: string; order_number: string; status: string }>();
+    .eq("order_number", normalizedLookup)
+    .select(selectCols)
+    .order("placed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{
+      id: string;
+      order_number: string;
+      status: string;
+      placed_at: string;
+    }>();
 
-  if (error || !data) {
-    throw new Error(error?.message ?? "Unable to update order status");
+  if (byOrderNumber.error) {
+    throw new Error(byOrderNumber.error.message);
+  }
+
+  let data = byOrderNumber.data;
+
+  if (!data && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedLookup)) {
+    const byId = await supabase
+      .from("orders")
+      .update({ status: dbStatus })
+      .eq("id", normalizedLookup)
+      .select(selectCols)
+      .order("placed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{
+        id: string;
+        order_number: string;
+        status: string;
+        placed_at: string;
+      }>();
+
+    if (byId.error) {
+      throw new Error(byId.error.message);
+    }
+
+    data = byId.data;
+  }
+
+  if (!data) {
+    throw new Error("Unable to update order status");
   }
 
   return {
@@ -933,14 +1175,55 @@ export const updateOrderStatusFromManager = async (input: {
 
 export const getOrderTrackerStatus = async (orderNumber: string) => {
   const supabase = assertSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("orders")
-    .select("id,order_number,status")
-    .eq("order_number", orderNumber)
-    .single<{ id: string; order_number: string; status: string }>();
+  const normalizedLookup = orderNumber.trim();
+  if (!normalizedLookup) {
+    throw new Error("Order number is required");
+  }
 
-  if (error || !data) {
-    throw new Error(error?.message ?? "Order not found");
+  const selectCols = "id,order_number,status,placed_at";
+
+  const byOrderNumber = await supabase
+    .from("orders")
+    .select(selectCols)
+    .eq("order_number", normalizedLookup)
+    .order("placed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{
+      id: string;
+      order_number: string;
+      status: string;
+      placed_at: string;
+    }>();
+
+  if (byOrderNumber.error) {
+    throw new Error(byOrderNumber.error.message);
+  }
+
+  let data = byOrderNumber.data;
+
+  if (!data && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedLookup)) {
+    const byId = await supabase
+      .from("orders")
+      .select(selectCols)
+      .eq("id", normalizedLookup)
+      .order("placed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{
+        id: string;
+        order_number: string;
+        status: string;
+        placed_at: string;
+      }>();
+
+    if (byId.error) {
+      throw new Error(byId.error.message);
+    }
+
+    data = byId.data;
+  }
+
+  if (!data) {
+    throw new Error("Order not found");
   }
 
   return {
@@ -948,6 +1231,117 @@ export const getOrderTrackerStatus = async (orderNumber: string) => {
     orderNumber: data.order_number,
     status: toCustomerTrackerStatus(data.status),
   };
+};
+
+export type CustomerOrderHistoryItem = {
+  orderNumber: string;
+  tableLabel: string;
+  status: "placed" | "confirmed" | "preparing" | "ready" | "served";
+  notes: string;
+  subtotal: number;
+  tipAmount: number;
+  serviceFee: number;
+  gstAmount: number;
+  total: number;
+  placedAt: string;
+  items: Array<{
+    name: string;
+    quantity: number;
+    price: number;
+    details: string;
+  }>;
+};
+
+export const getCustomerOrderHistoryByDevice = async (input: {
+  deviceFingerprint: string;
+  branchCode?: string;
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  if (!input.deviceFingerprint) {
+    throw new Error("deviceFingerprint is required");
+  }
+  const supabase = assertSupabaseAdmin();
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+  const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
+
+  const deviceLookup = await supabase
+    .from("customer_devices")
+    .select("id")
+    .eq("device_fingerprint", input.deviceFingerprint)
+    .maybeSingle<{ id: string }>();
+  if (deviceLookup.error) {
+    throw new Error(deviceLookup.error.message);
+  }
+  if (!deviceLookup.data?.id) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+    )
+    .eq("outlet_id", outlet.id)
+    .eq("customer_device_id", deviceLookup.data.id)
+    .order("placed_at", { ascending: false })
+    .limit(safeLimit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  type HistoryOrderItemRow = {
+    item_name_snapshot: string | null;
+    quantity: number | null;
+    unit_price: number | null;
+    special_instructions: string | null;
+  };
+  type HistoryTableRelation = { table_label: string | null } | null;
+  type HistoryOrderRow = {
+    order_number: string;
+    status: string;
+    notes: string | null;
+    subtotal: number | null;
+    tip_amount: number | null;
+    service_fee: number | null;
+    tax_amount: number | null;
+    total_amount: number | null;
+    placed_at: string;
+    restaurant_tables: HistoryTableRelation | HistoryTableRelation[];
+    order_items: HistoryOrderItemRow[] | null;
+  };
+
+  return (data ?? []).map((raw) => {
+    const row = raw as unknown as HistoryOrderRow;
+    const tableRelation = Array.isArray(row.restaurant_tables)
+      ? row.restaurant_tables[0]
+      : row.restaurant_tables;
+    const itemRows = Array.isArray(row.order_items) ? row.order_items : [];
+
+    return {
+      orderNumber: String(row.order_number),
+      tableLabel: String(tableRelation?.table_label ?? "Table"),
+      status: toCustomerTrackerStatus(String(row.status)) as
+        | "placed"
+        | "confirmed"
+        | "preparing"
+        | "ready"
+        | "served",
+      notes: String(row.notes ?? ""),
+      subtotal: Number(row.subtotal ?? 0),
+      tipAmount: Number(row.tip_amount ?? 0),
+      serviceFee: Number(row.service_fee ?? 0),
+      gstAmount: Number(row.tax_amount ?? 0),
+      total: Number(row.total_amount ?? 0),
+      placedAt: String(row.placed_at),
+      items: itemRows.map((item) => ({
+        name: String(item.item_name_snapshot ?? "Item"),
+        quantity: Number(item.quantity ?? 1),
+        price: Number(item.unit_price ?? 0),
+        details: String(item.special_instructions ?? ""),
+      })),
+    };
+  });
 };
 
 export const getOwnerDashboardCards = async (branchCode = DEFAULT_BRANCH) => {
@@ -985,28 +1379,40 @@ export const getOwnerSalesTrend = async (
 ) => {
   const supabase = assertSupabaseAdmin();
   const outlet = await getOutletByBranchCode(branchCode);
+  const safeRange = Math.max(1, Math.min(rangeDays, 90));
 
   const startDate = new Date();
-  startDate.setDate(startDate.getDate() - Math.max(1, rangeDays) + 1);
-  const yyyy = startDate.getFullYear();
-  const mm = String(startDate.getMonth() + 1).padStart(2, "0");
-  const dd = String(startDate.getDate()).padStart(2, "0");
-  const isoDate = `${yyyy}-${mm}-${dd}`;
+  startDate.setDate(startDate.getDate() - safeRange + 1);
+  startDate.setHours(0, 0, 0, 0);
 
   const { data, error } = await supabase
-    .from("v_sales_trend_daily")
-    .select("day,sales_amount")
+    .from("orders")
+    .select("placed_at,total_amount,status")
     .eq("outlet_id", outlet.id)
-    .gte("day", isoDate)
-    .order("day", { ascending: true });
+    .gte("placed_at", startDate.toISOString())
+    .in("status", ["ready", "served", "completed"]);
 
   if (error) {
     throw new Error(error.message);
   }
 
-  return (data ?? []).map((row) => ({
-    date: String((row as { day?: string }).day ?? ""),
-    sales: Number((row as { sales_amount?: number | null }).sales_amount ?? 0),
+  const salesByDay = new Map<string, number>();
+  for (let i = 0; i < safeRange; i += 1) {
+    const day = new Date(startDate);
+    day.setDate(startDate.getDate() + i);
+    const key = day.toISOString().slice(0, 10);
+    salesByDay.set(key, 0);
+  }
+
+  for (const row of data ?? []) {
+    const dayKey = String(row.placed_at ?? "").slice(0, 10);
+    if (!salesByDay.has(dayKey)) continue;
+    salesByDay.set(dayKey, (salesByDay.get(dayKey) ?? 0) + Number(row.total_amount ?? 0));
+  }
+
+  return Array.from(salesByDay.entries()).map(([date, sales]) => ({
+    date,
+    sales: Math.round(sales),
   }));
 };
 
@@ -1073,8 +1479,8 @@ export const getOwnerTopSellingItems = async (
     .slice(0, 20);
 };
 
-const inProgressStatuses = new Set(["placed", "confirmed", "accepted", "preparing", "ready"]);
-const completedStatuses = new Set(["served", "completed"]);
+const inProgressStatuses = new Set(["placed", "confirmed", "accepted", "preparing"]);
+const completedStatuses = new Set(["ready", "served", "completed"]);
 
 const minutesBetween = (fromIso: string, toDate = new Date()) => {
   const from = new Date(fromIso);
@@ -1083,9 +1489,16 @@ const minutesBetween = (fromIso: string, toDate = new Date()) => {
   return Math.round(diffMs / 60000);
 };
 
+const resolveCompletionDate = (updatedAtIso: unknown, fallback: Date) => {
+  const value = typeof updatedAtIso === "string" ? updatedAtIso : "";
+  if (!value) return fallback;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+};
+
 const toOwnerOrderStatus = (status: string) => {
-  if (status === "preparing" || status === "ready") return "Preparing";
-  if (status === "served" || status === "completed") return "Served";
+  if (status === "preparing") return "Preparing";
+  if (status === "ready" || status === "served" || status === "completed") return "Completed";
   return "Confirmed";
 };
 
@@ -1116,7 +1529,7 @@ export const getOwnerOrdersSummary = async (
 
   const { data, error } = await supabase
     .from("orders")
-    .select("status,placed_at,total_amount")
+    .select("status,placed_at,updated_at,total_amount")
     .eq("outlet_id", outlet.id)
     .gte("placed_at", twoDaysAgoStart.toISOString());
 
@@ -1151,14 +1564,16 @@ export const getOwnerOrdersSummary = async (
       if (completedStatuses.has(status)) completedCount += 1;
       todaySales += amount;
       if (completedStatuses.has(status)) {
-        todayCompletionMinutes += minutesBetween(placedAt, now);
+        const completionDate = resolveCompletionDate(row.updated_at, now);
+        todayCompletionMinutes += minutesBetween(placedAt, completionDate);
         todayCompletionCount += 1;
       }
     } else if (isYesterday) {
       totalYesterday += 1;
       yesterdaySales += amount;
       if (completedStatuses.has(status)) {
-        yesterdayCompletionMinutes += minutesBetween(placedAt, now);
+        const completionDate = resolveCompletionDate(row.updated_at, now);
+        yesterdayCompletionMinutes += minutesBetween(placedAt, completionDate);
         yesterdayCompletionCount += 1;
       }
     }
@@ -1298,7 +1713,7 @@ export type OwnerOrderRow = {
   tableNumber: string;
   itemsCount: number;
   totalBill: number;
-  status: "Confirmed" | "Preparing" | "Served";
+  status: "Confirmed" | "Preparing" | "Completed";
   dateTime: string;
   completionPrepTime: string;
 };
@@ -1317,7 +1732,7 @@ export const getOwnerOrdersTable = async (
   const { data, error } = await supabase
     .from("orders")
     .select(
-      "order_number,status,placed_at,total_amount,restaurant_tables(table_number),order_items(quantity)",
+      "order_number,status,placed_at,updated_at,total_amount,restaurant_tables(table_number),order_items(quantity)",
     )
     .eq("outlet_id", outlet.id)
     .gte("placed_at", start.toISOString())
@@ -1335,6 +1750,7 @@ export const getOwnerOrdersTable = async (
     order_number: string | null;
     status: string | null;
     placed_at: string | null;
+    updated_at: string | null;
     total_amount: number | null;
     restaurant_tables: OwnerOrdersTableTableRelation | OwnerOrdersTableTableRelation[];
     order_items: OwnerOrdersTableItemRow[] | null;
@@ -1353,7 +1769,10 @@ export const getOwnerOrdersTable = async (
     const tableNumber = Number(tableRelation?.table_number ?? 0);
     const placedAt = String(typedRow.placed_at ?? new Date().toISOString());
     const statusRaw = String(typedRow.status ?? "placed");
-    const minutes = minutesBetween(placedAt, now);
+    const completionReference = completedStatuses.has(statusRaw)
+      ? resolveCompletionDate(typedRow.updated_at, now)
+      : now;
+    const minutes = minutesBetween(placedAt, completionReference);
     const prepLabel = completedStatuses.has(statusRaw)
       ? `${minutes} min (completed)`
       : `${minutes} min (prep)`;
@@ -1526,7 +1945,7 @@ export const getAdminEarnings = async (): Promise<AdminEarningsResponse> => {
     .from("orders")
     .select("outlet_id,placed_at,total_amount,status")
     .in("outlet_id", outletIds)
-    .in("status", ["served", "completed"])
+    .in("status", ["ready", "served", "completed"])
     .gte("placed_at", sinceIso);
 
   if (ordersError) {
@@ -1833,7 +2252,8 @@ export const getOwnerMenuInsights = async (
 const toOrderStatusLabel = (status: string) => {
   if (status === "placed") return "New";
   if (status === "confirmed" || status === "accepted") return "Accepted";
-  if (status === "preparing" || status === "ready") return "Preparing";
+  if (status === "preparing") return "Preparing";
+  if (status === "ready") return "Ready";
   if (status === "served" || status === "completed") return "Served";
   return "No active order";
 };
@@ -2340,3 +2760,5 @@ export const getAdminQrCodes = async (
     .filter((row) => row.tableNumber > 0)
     .sort((a, b) => a.tableNumber - b.tableNumber);
 };
+
+

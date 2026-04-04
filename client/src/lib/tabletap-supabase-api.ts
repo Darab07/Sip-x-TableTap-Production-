@@ -81,8 +81,9 @@ export type MenuCatalogApiResponse = {
 };
 
 export const fetchMenuCatalog = async (branchCode = "f7-islamabad") => {
+  const cacheBust = Date.now();
   const res = await apiFetch(
-    `${API_BASE}/menu/catalog?branchCode=${encodeURIComponent(branchCode)}`,
+    `${API_BASE}/menu/catalog?branchCode=${encodeURIComponent(branchCode)}&ts=${cacheBust}`,
   );
   return readJson<MenuCatalogApiResponse>(res);
 };
@@ -164,6 +165,8 @@ export type PlaceOrderPayload = {
   branchCode?: string;
   tableNumber: number;
   deviceFingerprint?: string;
+  customerName?: string;
+  customerEmail?: string;
   notes?: string;
   tipAmount?: number;
   serviceFee?: number;
@@ -190,7 +193,7 @@ export type PlacedOrderApiResponse = {
     id: string;
     orderNumber: string;
     tableLabel: string;
-    status: "placed" | "confirmed" | "preparing" | "served";
+    status: "placed" | "confirmed" | "preparing" | "ready" | "served";
     subtotal: number;
     tipAmount: number;
     serviceFee: number;
@@ -215,6 +218,60 @@ export const placeOrder = async (payload: PlaceOrderPayload) => {
   return readJson<PlacedOrderApiResponse>(res);
 };
 
+export type CustomerOrderHistoryApiItem = {
+  orderNumber: string;
+  tableLabel: string;
+  status: "placed" | "confirmed" | "preparing" | "ready" | "served";
+  notes: string;
+  subtotal: number;
+  tipAmount: number;
+  serviceFee: number;
+  gstAmount: number;
+  total: number;
+  placedAt: string;
+  items: Array<{
+    name: string;
+    quantity: number;
+    price: number;
+    details: string;
+  }>;
+};
+
+export const fetchCustomerOrderHistory = async (input: {
+  deviceFingerprint: string;
+  branchCode?: string;
+  limit?: number;
+}) => {
+  const params = new URLSearchParams({
+    deviceFingerprint: input.deviceFingerprint,
+    branchCode: input.branchCode ?? "f7-islamabad",
+    limit: String(input.limit ?? 200),
+  });
+  const res = await apiFetch(`${API_BASE}/orders/history?${params.toString()}`);
+  return readJson<{ orders: CustomerOrderHistoryApiItem[] }>(res);
+};
+
+export const upsertCustomerProfile = async (input: {
+  deviceFingerprint: string;
+  name: string;
+  email: string;
+}) => {
+  const res = await apiFetch(`${API_BASE}/customers/profile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return readJson<{
+    profile: {
+      deviceFingerprint: string;
+      name: string;
+      email: string;
+      savedToDatabase: boolean;
+      warning?: string;
+    };
+  }>(res);
+};
+
 export type ManagerLiveOrder = {
   id: string;
   orderNumber: string;
@@ -223,8 +280,7 @@ export type ManagerLiveOrder = {
   orderedItems: string[];
   hasOrderNotes: boolean;
   orderNotes: string;
-  status: "new" | "accepted" | "preparing" | "completed";
-  readyToServe: boolean;
+  status: "new" | "accepted" | "preparing" | "ready";
 };
 
 export const fetchManagerLiveOrders = async (branchCode = "f7-islamabad") => {
@@ -236,7 +292,7 @@ export const fetchManagerLiveOrders = async (branchCode = "f7-islamabad") => {
 
 export const updateManagerOrderStatus = async (
   orderNumber: string,
-  status: "accepted" | "preparing" | "ready" | "completed",
+  status: "accepted" | "preparing" | "ready",
 ) => {
   const res = await apiFetch(
     `${API_BASE}/manager/orders/${encodeURIComponent(orderNumber)}/status`,
@@ -369,7 +425,7 @@ export const fetchOwnerOrdersTable = async (
       tableNumber: string;
       itemsCount: number;
       totalBill: number;
-      status: "Confirmed" | "Preparing" | "Served";
+      status: "Confirmed" | "Preparing" | "Completed";
       dateTime: string;
       completionPrepTime: string;
     }>;
@@ -377,14 +433,15 @@ export const fetchOwnerOrdersTable = async (
 };
 
 export const fetchOrderStatus = async (orderNumber: string) => {
+  const cacheBust = Date.now();
   const res = await apiFetch(
-    `${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status`,
+    `${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status?ts=${cacheBust}`,
   );
   return readJson<{
     order: {
       id: string;
       orderNumber: string;
-      status: "placed" | "confirmed" | "preparing" | "served";
+      status: "placed" | "confirmed" | "preparing" | "ready" | "served";
     };
   }>(res);
 };
@@ -580,4 +637,5 @@ export const deleteAdminQrCodeApi = async (id: string) => {
   });
   return readJson<{ ok: true }>(res);
 };
+
 

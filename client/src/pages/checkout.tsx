@@ -28,26 +28,28 @@ interface StoredOrder {
   gstAmount: number;
   tableLabel: string;
   notes: string;
-  status: "placed" | "confirmed" | "preparing" | "served";
+  status: "placed" | "confirmed" | "preparing" | "ready" | "served";
   statusHistory: Array<{
     status: string;
     timestamp: number;
     message: string;
   }>;
   items: CartItem[];
+  placedAt?: string;
 }
 
 const userId = getOrCreateUserID();
 const getStoredOrderKey = () => `lastOrder_${userId}`;
 
-type CardChoice = "debit" | "jazzcash" | "easypaisa";
+type CardChoice = "debit" | "jazzcash" | "easypaisa" | null;
 
 export default function Checkout() {
   const [location, setLocation] = useLocation();
   const [cart, setCart] = useState<Record<string, CartItem>>({});
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [selectedTip, setSelectedTip] = useState(0);
   const [selectedCardChoice, setSelectedCardChoice] =
-    useState<CardChoice>("debit");
+    useState<CardChoice>(null);
   const [showNewCardForm, setShowNewCardForm] = useState(false);
   const [cardholderName, setCardholderName] = useState("");
   const [cardNumber, setCardNumber] = useState("");
@@ -92,7 +94,9 @@ export default function Checkout() {
   );
   const total = subtotal + tipAmount + gstAmount + serviceFee;
   const paymentLabel =
-    selectedCardChoice === "debit"
+    selectedCardChoice === null
+      ? "Select payment method"
+      : selectedCardChoice === "debit"
       ? "Pay with debit card"
       : selectedCardChoice === "jazzcash"
         ? "Pay with JazzCash"
@@ -156,10 +160,17 @@ export default function Checkout() {
   };
 
   const handleBack = () => {
-    setLocation("/menu");
+    setLocation("/sip/menu");
   };
 
   const handlePayment = async () => {
+    if (isPlacingOrder) {
+      return;
+    }
+    if (!selectedCardChoice) {
+      window.alert("Please select a payment method.");
+      return;
+    }
     if (selectedCardChoice === "debit" && !validateCardForm()) {
       return;
     }
@@ -171,12 +182,17 @@ export default function Checkout() {
     const notes = localStorage.getItem(`orderNotes_${userId}`) || "";
     const cartItems = Object.values(cart);
     const deviceFingerprint = getDeviceFingerprint();
+    const customerName = (localStorage.getItem("tabletap_display_name") || "").trim();
+    const customerEmail = (localStorage.getItem("tabletap_account_email") || "").trim().toLowerCase();
 
     let orderData: StoredOrder;
+    setIsPlacingOrder(true);
     try {
       const placed = await placeOrder({
         tableNumber,
         deviceFingerprint,
+        customerName: customerName || undefined,
+        customerEmail: customerEmail || undefined,
         notes,
         subtotal,
         total,
@@ -224,16 +240,39 @@ export default function Checkout() {
           : "Unable to place order right now. Please try again.",
       );
       return;
+    } finally {
+      setIsPlacingOrder(false);
     }
 
     localStorage.setItem(getStoredOrderKey(), JSON.stringify(orderData));
+    const trackedOrdersKey = `tracked_orders_${userId}`;
+    const existingTrackedOrders = (() => {
+      try {
+        const raw = localStorage.getItem(trackedOrdersKey);
+        if (!raw) return [] as StoredOrder[];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? (parsed as StoredOrder[]) : ([] as StoredOrder[]);
+      } catch {
+        return [] as StoredOrder[];
+      }
+    })();
+    const normalizedOrderData: StoredOrder = {
+      ...orderData,
+      placedAt: orderData.placedAt || new Date().toISOString(),
+    };
+    const nextTrackedOrders = [
+      normalizedOrderData,
+      ...existingTrackedOrders.filter((entry) => entry.orderNumber !== normalizedOrderData.orderNumber),
+    ].slice(0, 30);
+    localStorage.setItem(trackedOrdersKey, JSON.stringify(nextTrackedOrders));
+    localStorage.setItem(getStoredOrderKey(), JSON.stringify(normalizedOrderData));
 
     localStorage.removeItem(`cart_${userId}`);
     localStorage.removeItem(`selectedTip_${userId}`);
     localStorage.removeItem(`orderNotes_${userId}`);
     localStorage.removeItem("splitType");
 
-    const event = new CustomEvent("orderPlaced", { detail: orderData });
+    const event = new CustomEvent("orderPlaced", { detail: normalizedOrderData });
     window.dispatchEvent(event);
 
     try {
@@ -259,7 +298,7 @@ export default function Checkout() {
       );
     }
 
-    setLocation(`/menu${search}`);
+    setLocation(`/sip/menu${search}`);
   };
 
   return (
@@ -506,9 +545,11 @@ export default function Checkout() {
                 JazzCash
               </p>
               <div className="flex items-center gap-2">
-                <span className="rounded bg-gray-100 px-2 py-1 text-[10px] font-semibold text-[#b30059]">
-                  JAZZCASH
-                </span>
+                <img
+                  src="/Jazzcash.png"
+                  alt="JazzCash"
+                  className="h-6 w-auto rounded bg-white px-1 py-0.5 object-contain"
+                />
                 <span
                   className={`flex h-7 w-7 items-center justify-center rounded-md border ${
                     selectedCardChoice === "jazzcash"
@@ -537,9 +578,11 @@ export default function Checkout() {
                 Easypaisa
               </p>
               <div className="flex items-center gap-2">
-                <span className="rounded bg-gray-100 px-2 py-1 text-[10px] font-semibold text-[#008a4a]">
-                  EASYPAISA
-                </span>
+                <img
+                  src="/Easypaisa.png"
+                  alt="Easypaisa"
+                  className="h-6 w-auto rounded bg-white px-1 py-0.5 object-contain"
+                />
                 <span
                   className={`flex h-7 w-7 items-center justify-center rounded-md border ${
                     selectedCardChoice === "easypaisa"
@@ -558,9 +601,10 @@ export default function Checkout() {
           <button
             type="button"
             onClick={handlePayment}
-            className="w-full rounded-full bg-black px-5 py-3.5 text-base font-semibold text-white heading-font transition-colors hover:bg-gray-900"
+            disabled={!selectedCardChoice || isPlacingOrder}
+            className="w-full rounded-full bg-black px-5 py-3.5 text-base font-semibold text-white heading-font transition-colors hover:bg-gray-900 disabled:cursor-not-allowed disabled:bg-gray-400"
           >
-            {paymentLabel}
+            {isPlacingOrder ? "Placing order..." : paymentLabel}
           </button>
 
           <p className="mt-4 text-center text-xs text-gray-500 subtext-font">
@@ -581,4 +625,5 @@ export default function Checkout() {
     </motion.div>
   );
 }
+
 

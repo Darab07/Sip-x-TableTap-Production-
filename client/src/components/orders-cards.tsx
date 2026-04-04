@@ -109,7 +109,7 @@ export function OrdersCards() {
             </div>
           </CardHeader>
           <CardFooter className="text-sm text-muted-foreground">
-            Orders currently being prepared or confirmed.
+            Orders currently in new, accepted, or preparing stages.
           </CardFooter>
         </Card>
 
@@ -129,7 +129,7 @@ export function OrdersCards() {
             </div>
           </CardHeader>
           <CardFooter className="text-sm text-muted-foreground">
-            Successfully served and closed orders.
+            Orders that reached ready/completed status.
           </CardFooter>
         </Card>
       </div>
@@ -174,10 +174,11 @@ export function OrdersCards() {
             </div>
           </CardHeader>
           <CardFooter className="text-sm text-muted-foreground">
-            From placement to served status.
+            From placement to ready/completed status.
           </CardFooter>
         </Card>
       </div>
     </div>
   )
 }
+

@@ -33,6 +33,8 @@ import {
   getOwnerSalesTrend,
   getOwnerTopSellingItems,
   placeOrderInSupabase,
+  getCustomerOrderHistoryByDevice,
+  upsertCustomerDeviceProfile,
   updateManagerMenuItem,
   updateManagerTableAvailability,
   updateOrderStatusFromManager,
@@ -226,6 +228,51 @@ export const buildApiRouter = (): Router => {
   );
 
   router.get(
+    "/orders/history",
+    asyncHandler(async (req, res) => {
+      const deviceFingerprint =
+        typeof req.query.deviceFingerprint === "string"
+          ? req.query.deviceFingerprint.trim()
+          : "";
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+      const limitRaw =
+        typeof req.query.limit === "string" ? Number(req.query.limit) : 200;
+      if (!deviceFingerprint) {
+        throw new HttpError(400, "deviceFingerprint is required");
+      }
+      const orders = await getCustomerOrderHistoryByDevice({
+        deviceFingerprint,
+        branchCode,
+        limit: Number.isFinite(limitRaw) ? limitRaw : 200,
+      });
+      res.json({ orders });
+    }),
+  );
+
+  router.post(
+    "/customers/profile",
+    asyncHandler(async (req, res) => {
+      const { deviceFingerprint, name, email } = req.body as {
+        deviceFingerprint?: string;
+        name?: string;
+        email?: string;
+      };
+      if (!deviceFingerprint || !name || !email) {
+        throw new HttpError(400, "deviceFingerprint, name and email are required");
+      }
+      const profile = await upsertCustomerDeviceProfile({
+        deviceFingerprint,
+        name,
+        email,
+      });
+      res.json({ profile });
+    }),
+  );
+
+  router.get(
     "/manager/live-orders",
     asyncHandler(async (req, res) => {
       const branchCode =
@@ -297,7 +344,7 @@ export const buildApiRouter = (): Router => {
     asyncHandler(async (req, res) => {
       const { orderNumber } = req.params;
       const { status } = req.body as {
-        status?: "accepted" | "preparing" | "ready" | "completed";
+        status?: "accepted" | "preparing" | "ready";
       };
       if (!orderNumber || !status) {
         throw new HttpError(400, "orderNumber and status are required");
@@ -704,3 +751,4 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   return httpServer;
 }
+

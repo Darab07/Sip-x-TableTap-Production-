@@ -31,12 +31,15 @@ import { getOrCreateUserID } from "@/lib/userID";
 import {
   checkInTableFromQrApi,
   callWaiterApi,
+  fetchCustomerOrderHistory,
   fetchOrderStatus,
   fetchMenuCatalog,
   fetchTablePublicAccess,
+  upsertCustomerProfile,
   type MenuCatalogApiResponse,
 } from "@/lib/tabletap-supabase-api";
 import { supabaseBrowser } from "@/lib/supabase";
+import { getDeviceFingerprint } from "@/lib/tabletap-api";
 
 const userId = getOrCreateUserID();
 
@@ -53,6 +56,7 @@ const RESTAURANT = {
 };
 
 const DISPLAY_NAME_KEY = "tabletap_display_name";
+const ACCOUNT_EMAIL_KEY = "tabletap_account_email";
 const MENU_AUTH_KEY = "tabletap_menu_authenticated";
 const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
 
@@ -95,7 +99,7 @@ type StoredOrder = {
   gstAmount: number;
   tableLabel: string;
   notes: string;
-  status: 'placed' | 'confirmed' | 'preparing' | 'served';
+  status: 'placed' | 'confirmed' | 'preparing' | 'ready' | 'served';
   statusHistory: Array<{
     status: string;
     timestamp: number;
@@ -108,7 +112,35 @@ type StoredOrder = {
     image?: string;
     details?: string;
   }>;
+  placedAt?: string;
 };
+
+const isCompletedPastOrderStatus = (status: StoredOrder["status"]) =>
+  status === "ready" || status === "served";
+
+const TRACKABLE_ORDER_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const normalizeTrackedStatus = (rawStatus: unknown): StoredOrder["status"] => {
+  const normalized = String(rawStatus ?? "").trim().toLowerCase();
+  if (normalized === "confirmed" || normalized === "accepted") return "confirmed";
+  if (normalized === "preparing" || normalized === "in_progress") return "preparing";
+  if (normalized === "ready" || normalized === "ready_to_serve") return "ready";
+  if (normalized === "served" || normalized === "completed" || normalized === "done") return "served";
+  return "placed";
+};
+
+const getOrderPlacedAtMs = (
+  order: Pick<StoredOrder, "placedAt" | "statusHistory">,
+) => {
+  const placedAtMs = order.placedAt ? new Date(order.placedAt).getTime() : NaN;
+  if (Number.isFinite(placedAtMs)) return placedAtMs;
+  const fallbackHistoryTs = order.statusHistory?.[0]?.timestamp ?? Date.now();
+  return Number.isFinite(fallbackHistoryTs) ? fallbackHistoryTs : Date.now();
+};
+
+const isOrderWithinTrackWindow = (
+  order: Pick<StoredOrder, "placedAt" | "statusHistory">,
+) => Date.now() - getOrderPlacedAtMs(order) <= TRACKABLE_ORDER_WINDOW_MS;
 
 type MenuItemAddOn = {
   label: string;
@@ -429,6 +461,7 @@ export default function Menu() {
   };
 
 const tableIdentifier = getTableIdentifier();
+const deviceFingerprint = getDeviceFingerprint();
 const tableNumberMatch = tableIdentifier.match(/(\d+)/);
 const tableNumber =
   tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || "1";
@@ -441,15 +474,15 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return match ? match[1] : "";
   };
 
-  const getStoredOrderForCurrentTable = () => {
+    const getStoredOrderForCurrentTable = () => {
     const savedOrder = localStorage.getItem(`lastOrder_${userId}`);
     if (!savedOrder) return null;
     try {
       const parsed = JSON.parse(savedOrder) as StoredOrder;
-      const parsedStatus = String(
-        (parsed as { status?: unknown }).status ?? "",
+      const normalizedStatus = normalizeTrackedStatus(
+        (parsed as { status?: unknown }).status,
       );
-      if (parsedStatus === "served" || parsedStatus === "completed") {
+      if (normalizedStatus === "served") {
         localStorage.removeItem(`lastOrder_${userId}`);
         return null;
       }
@@ -457,7 +490,18 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       if (savedTableNumber !== tableNumber) {
         return null;
       }
-      return parsed;
+      const normalizedOrder: StoredOrder = {
+        ...parsed,
+        status: normalizedStatus,
+        placedAt:
+          parsed.placedAt ||
+          new Date(parsed.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
+      };
+      if (!isOrderWithinTrackWindow(normalizedOrder)) {
+        localStorage.removeItem(`lastOrder_${userId}`);
+        return null;
+      }
+      return normalizedOrder;
     } catch {
       return null;
     }
@@ -477,7 +521,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   // Scroll-based active tab detection
   const [scrollActiveTab, setScrollActiveTab] = useState("Breakfast");
   const [showStickyHeader, setShowStickyHeader] = useState(false);
-  const [serviceType, setServiceType] = useState<"table" | "takeaway">("table");
   const [selectedItem, setSelectedItem] = useState<(MenuItemData & { description: string; price: number }) | null>(null);
   const [selectedEggType, setSelectedEggType] = useState<string | null>(null);
   const [selectedTemperature, setSelectedTemperature] = useState<string | null>(null);
@@ -521,7 +564,36 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [showOrderTracker, setShowOrderTracker] = useState(() => {
     return Boolean(getStoredOrderForCurrentTable());
   });
+  const [trackedOrders, setTrackedOrders] = useState<StoredOrder[]>(() => {
+    if (typeof window === "undefined") return [];
+    const fallbackOrder = getStoredOrderForCurrentTable();
+    try {
+      const raw = localStorage.getItem(`tracked_orders_${userId}`);
+      if (!raw) return fallbackOrder ? [fallbackOrder] : [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return fallbackOrder ? [fallbackOrder] : [];
+      const normalized = parsed
+        .map((entry) => ({
+          ...(entry as StoredOrder),
+          status: normalizeTrackedStatus((entry as { status?: unknown }).status),
+          placedAt:
+            (entry as StoredOrder).placedAt ||
+            new Date((entry as StoredOrder).statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
+        }))
+        .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
+        .filter((entry) => isOrderWithinTrackWindow(entry));
+
+      if (normalized.length === 0 && fallbackOrder) {
+        return [fallbackOrder];
+      }
+      return normalized;
+    } catch {
+      return fallbackOrder ? [fallbackOrder] : [];
+    }
+  });
+  const [trackerPageIndex, setTrackerPageIndex] = useState(0);
   const [showAuthDrawer, setShowAuthDrawer] = useState(false);
+  const [showAccountDrawer, setShowAccountDrawer] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -537,6 +609,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     () => localStorage.getItem(MENU_AUTH_KEY) === "true",
   );
   const [showPastOrdersModal, setShowPastOrdersModal] = useState(false);
+  const [pastOrders, setPastOrders] = useState<StoredOrder[]>([]);
+  const [pastOrdersLoading, setPastOrdersLoading] = useState(false);
   const [showSidebarMenu, setShowSidebarMenu] = useState(false);
   const [showFirstVisitPromo, setShowFirstVisitPromo] = useState(() => {
     if (typeof window === "undefined") {
@@ -559,6 +633,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
     return storedName?.trim() || getDefaultDisplayName(userId);
   });
+  const [accountEmail, setAccountEmail] = useState(() => {
+    return localStorage.getItem(ACCOUNT_EMAIL_KEY)?.trim().toLowerCase() || "";
+  });
+  const [accountEmailDraft, setAccountEmailDraft] = useState(() => {
+    return localStorage.getItem(ACCOUNT_EMAIL_KEY)?.trim().toLowerCase() || "";
+  });
+  const [accountSaveError, setAccountSaveError] = useState<string | null>(null);
   const [remoteCatalog, setRemoteCatalog] =
     useState<MenuCatalogApiResponse | null>(null);
   const [tableAccess, setTableAccess] = useState<{
@@ -575,6 +656,58 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const waiterBannerIntervalRef = useRef<number | null>(null);
   const waiterBannerTimeoutRef = useRef<number | null>(null);
   const pendingJoinTimeoutRef = useRef<number | null>(null);
+  const orderTrackerBarRef = useRef<HTMLDivElement | null>(null);
+  const cartBarRef = useRef<HTMLDivElement | null>(null);
+  const [callWaiterBottomOffset, setCallWaiterBottomOffset] = useState(24);
+  const trackableOrders = useMemo(() => {
+    return trackedOrders
+      .map((order) => ({
+        ...order,
+        status: normalizeTrackedStatus(order.status),
+        placedAt:
+          order.placedAt ||
+          new Date(order.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
+      }))
+      .filter((order) => normalizeTrackedStatus(order.status) !== "served")
+      .filter((order) => isOrderWithinTrackWindow(order))
+      .filter((order) => getTableNumberFromLabel(order.tableLabel) === tableNumber)
+      .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
+  }, [trackedOrders, tableNumber]);
+
+  const currentTrackedOrder = trackableOrders[trackerPageIndex] ?? null;
+  const hasTrackableOrders = trackableOrders.length > 0;
+
+  const openTrackerPanel = () => {
+    if (!hasTrackableOrders) return;
+    if (!trackableOrders[trackerPageIndex]) {
+      setTrackerPageIndex(0);
+    }
+    setShowOrderTracker(true);
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(`tracked_orders_${userId}`, JSON.stringify(trackedOrders.slice(0, 30)));
+  }, [trackedOrders]);
+
+  useEffect(() => {
+    if (trackerPageIndex < trackableOrders.length) return;
+    setTrackerPageIndex(Math.max(trackableOrders.length - 1, 0));
+  }, [trackableOrders.length, trackerPageIndex]);
+
+  useEffect(() => {
+    if (!currentTrackedOrder) {
+      if (showOrderTracker) {
+        setShowOrderTracker(false);
+      }
+      return;
+    }
+    if (!lastOrder || lastOrder.orderNumber !== currentTrackedOrder.orderNumber || lastOrder.status !== currentTrackedOrder.status) {
+      setLastOrder(currentTrackedOrder);
+    }
+  }, [currentTrackedOrder, showOrderTracker, lastOrder]);
+
+
 
   const remoteItemsByCategory = useMemo(() => {
     const map = new Map<string, MenuItemData[]>();
@@ -892,7 +1025,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     setShowOrderTracker(false);
   };
 
-  // Order status update system
+    // Order status update system
   const updateOrderStatus = (
     newStatus: StoredOrder['status'],
     message: string,
@@ -901,24 +1034,29 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const currentOrder = lastOrderRef.current;
     if (!currentOrder) return;
     if (targetOrderNumber && currentOrder.orderNumber !== targetOrderNumber) return;
-    if (currentOrder.status === "served") return;
+    if (normalizeTrackedStatus(currentOrder.status) === "served") return;
 
     const statusRank: Record<StoredOrder["status"], number> = {
       placed: 0,
       confirmed: 1,
       preparing: 2,
-      served: 3,
+      ready: 3,
+      served: 4,
     };
 
-    if (statusRank[newStatus] <= statusRank[currentOrder.status]) return;
+    const normalizedNextStatus = normalizeTrackedStatus(newStatus);
+    if (statusRank[normalizedNextStatus] <= statusRank[normalizeTrackedStatus(currentOrder.status)]) return;
 
     const updatedOrder: StoredOrder = {
       ...currentOrder,
-      status: newStatus,
+      status: normalizedNextStatus,
+      placedAt:
+        currentOrder.placedAt ||
+        new Date(currentOrder.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
       statusHistory: [
         ...currentOrder.statusHistory,
         {
-          status: newStatus,
+          status: normalizedNextStatus,
           timestamp: Date.now(),
           message,
         },
@@ -927,14 +1065,34 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
     lastOrderRef.current = updatedOrder;
     setLastOrder(updatedOrder);
-    if (newStatus === "served") {
+    setTrackedOrders((current) => {
+      const withoutCurrent = current.filter((entry) => entry.orderNumber !== updatedOrder.orderNumber);
+      if (updatedOrder.status === "served" || !isOrderWithinTrackWindow(updatedOrder)) {
+        return withoutCurrent;
+      }
+      return [updatedOrder, ...withoutCurrent]
+        .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a))
+        .slice(0, 30);
+    });
+
+    if (updatedOrder.status === "served") {
       localStorage.removeItem(getStoredOrderKey());
       setShowOrderTracker(false);
     } else {
       localStorage.setItem(getStoredOrderKey(), JSON.stringify(updatedOrder));
     }
 
-    // Show notification
+    if (isCompletedPastOrderStatus(updatedOrder.status)) {
+      setPastOrders((current) => {
+        const withoutCurrent = current.filter(
+          (entry) => entry.orderNumber !== updatedOrder.orderNumber,
+        );
+        return [updatedOrder, ...withoutCurrent].sort(
+          (a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a),
+        );
+      });
+    }
+
     setNotification({
       type: 'info',
       title: 'Order Update',
@@ -946,6 +1104,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const getOrderStatusMessage = (status: StoredOrder["status"]) => {
     if (status === "confirmed") return "Your order has been confirmed!";
     if (status === "preparing") return "Your order is being prepared!";
+    if (status === "ready") return "Your order is ready!";
     if (status === "served") return "Your order has been served. Enjoy your meal!";
     return "Order placed successfully.";
   };
@@ -1521,7 +1680,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
       return priceEntries
         .map((entry) => `${entry.option} Rs.${entry.price.toLocaleString()}/-`)
-        .join(" â€¢ ");
+        .join(" • ");
     }
 
     const basePrice = getBaseItemPrice(item, null);
@@ -1694,6 +1853,38 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const getCartItemCount = () => {
     return Object.values(cart).reduce((total, item) => total + item.quantity, 0);
   };
+
+useEffect(() => {
+    const updateCallWaiterOffset = () => {
+      const trackerHeight =
+        showOrderTracker && currentTrackedOrder && orderTrackerBarRef.current
+          ? orderTrackerBarRef.current.offsetHeight
+          : 0;
+      const cartHeight =
+        getCartItemCount() > 0 && cartBarRef.current
+          ? cartBarRef.current.offsetHeight
+          : 0;
+
+      // Keep the button above any fixed bottom bars.
+      setCallWaiterBottomOffset(Math.max(24, trackerHeight + cartHeight + 16));
+    };
+
+    updateCallWaiterOffset();
+    window.addEventListener("resize", updateCallWaiterOffset);
+
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(updateCallWaiterOffset)
+        : null;
+
+    if (observer && orderTrackerBarRef.current) observer.observe(orderTrackerBarRef.current);
+    if (observer && cartBarRef.current) observer.observe(cartBarRef.current);
+
+    return () => {
+      window.removeEventListener("resize", updateCallWaiterOffset);
+      observer?.disconnect();
+    };
+  }, [showOrderTracker, currentTrackedOrder, cart, trackableOrders.length, trackerPageIndex]);
 
   const getCartQuantityByName = (itemName: string) => {
     const item = Object.values(cart).find(entry => entry.name === itemName);
@@ -2047,7 +2238,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   };
 
   useEffect(() => {
-    if (showItemModal || showCart || showSidebarMenu || showAuthDrawer) {
+    if (showItemModal || showCart || showSidebarMenu || showAuthDrawer || showAccountDrawer) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = '';
@@ -2055,13 +2246,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return () => {
       document.body.style.overflow = '';
     };
-  }, [showItemModal, showCart, showSidebarMenu, showAuthDrawer]);
+  }, [showItemModal, showCart, showSidebarMenu, showAuthDrawer, showAccountDrawer]);
 
   useEffect(() => {
-    if (showAuthDrawer) {
-      setDisplayNameDraft(displayName);
-    }
-  }, [showAuthDrawer, displayName]);
+    if (!showAccountDrawer) return;
+    setDisplayNameDraft(displayName);
+    setAccountEmailDraft(accountEmail);
+    setAccountSaveError(null);
+  }, [showAccountDrawer, displayName, accountEmail]);
 
   useEffect(() => {
     if (!supabaseBrowser) {
@@ -2084,6 +2276,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       const email = session?.user?.email ?? "";
       if (email) {
         setAuthEmail(email);
+        if (!localStorage.getItem(ACCOUNT_EMAIL_KEY)) {
+          const normalized = email.trim().toLowerCase();
+          setAccountEmail(normalized);
+          setAccountEmailDraft(normalized);
+          localStorage.setItem(ACCOUNT_EMAIL_KEY, normalized);
+        }
       }
       const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
       if (nameFromProfile) {
@@ -2105,6 +2303,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       const email = session?.user?.email ?? "";
       if (email) {
         setAuthEmail(email);
+        if (!localStorage.getItem(ACCOUNT_EMAIL_KEY)) {
+          const normalized = email.trim().toLowerCase();
+          setAccountEmail(normalized);
+          setAccountEmailDraft(normalized);
+          localStorage.setItem(ACCOUNT_EMAIL_KEY, normalized);
+        }
       }
       const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
       if (nameFromProfile) {
@@ -2135,35 +2339,163 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     localStorage.setItem(DISPLAY_NAME_KEY, finalName);
   };
 
-  const handleEditDisplayName = () => {
-    const nextName = window.prompt("Enter your name", displayName);
-    if (nextName === null) {
+  const loadPastOrdersFromServer = async () => {
+    try {
+      setPastOrdersLoading(true);
+      const response = await fetchCustomerOrderHistory({
+        deviceFingerprint,
+        branchCode: "f7-islamabad",
+        limit: 1000,
+      });
+
+      const mapped = response.orders
+        .map((order): StoredOrder => {
+          const normalizedStatus = normalizeTrackedStatus(order.status);
+          const placedAtMs = new Date(order.placedAt).getTime();
+          return {
+            orderNumber: order.orderNumber,
+            total: Number(order.total ?? 0),
+            subtotal: Number(order.subtotal ?? 0),
+            tipAmount: Number(order.tipAmount ?? 0),
+            serviceFee: Number(order.serviceFee ?? 0),
+            gstAmount: Number(order.gstAmount ?? 0),
+            tableLabel: order.tableLabel,
+            notes: order.notes ?? "",
+            status: normalizedStatus,
+            statusHistory: [
+              {
+                status: normalizedStatus,
+                timestamp: Number.isFinite(placedAtMs) ? placedAtMs : Date.now(),
+                message: "Order placed",
+              },
+            ],
+            placedAt: order.placedAt,
+            items: (order.items ?? []).map((item) => ({
+              name: item.name,
+              quantity: Number(item.quantity ?? 1),
+              price: Number(item.price ?? 0),
+              details: item.details ?? "",
+            })),
+          };
+        })
+        .filter((order) => isCompletedPastOrderStatus(order.status))
+        .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
+
+      const deduped: StoredOrder[] = [];
+      const seen = new Set<string>();
+      for (const order of mapped) {
+        if (seen.has(order.orderNumber)) continue;
+        seen.add(order.orderNumber);
+        deduped.push(order);
+      }
+
+      setPastOrders(deduped);
+    } catch (error) {
+      console.warn("Past orders sync failed:", error);
+    } finally {
+      setPastOrdersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadPastOrdersFromServer();
+    }, 1200);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!showPastOrdersModal) return;
+    void loadPastOrdersFromServer();
+  }, [showPastOrdersModal]);
+  const openAccountDrawer = () => {
+    setDisplayNameDraft(displayName);
+    setAccountEmailDraft(accountEmail);
+    setAccountSaveError(null);
+    setShowAccountDrawer(true);
+  };
+
+  const handleSaveAccountProfile = async () => {
+    const normalizedName = displayNameDraft.trim().slice(0, 32);
+    const normalizedEmail = accountEmailDraft.trim().toLowerCase();
+
+    if (!normalizedName) {
+      setAccountSaveError("Please enter your name.");
       return;
     }
-    const normalizedName = nextName.trim().slice(0, 32);
-    const finalName = normalizedName || getDefaultDisplayName(userId);
-    setDisplayName(finalName);
-    setDisplayNameDraft(finalName);
-    localStorage.setItem(DISPLAY_NAME_KEY, finalName);
+    if (!normalizedEmail) {
+      setAccountSaveError("Please enter your email.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setAccountSaveError("Please enter a valid email address.");
+      return;
+    }
+
+    setAccountSaveError(null);
+    setDisplayName(normalizedName);
+    setDisplayNameDraft(normalizedName);
+    setAccountEmail(normalizedEmail);
+    setAccountEmailDraft(normalizedEmail);
+    localStorage.setItem(DISPLAY_NAME_KEY, normalizedName);
+    localStorage.setItem(ACCOUNT_EMAIL_KEY, normalizedEmail);
+
+    try {
+      const response = await upsertCustomerProfile({
+        deviceFingerprint,
+        name: normalizedName,
+        email: normalizedEmail,
+      });
+      if (!response.profile.savedToDatabase && response.profile.warning) {
+        setAccountSaveError(response.profile.warning);
+        return;
+      }
+      setShowAccountDrawer(false);
+    } catch (error) {
+      setAccountSaveError(
+        error instanceof Error
+          ? error.message
+          : "Could not save account details to database. Please try again.",
+      );
+    }
   };
 
   // Listen for order placed events from checkout
   useEffect(() => {
     const handleOrderPlaced = (event: CustomEvent<StoredOrder>) => {
       const order = event.detail;
-      const orderTableNumber = getTableNumberFromLabel(order.tableLabel);
+      const normalizedOrder: StoredOrder = {
+        ...order,
+        status: normalizeTrackedStatus(order.status),
+        placedAt:
+          order.placedAt ||
+          new Date(order.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
+      };
+      const orderTableNumber = getTableNumberFromLabel(normalizedOrder.tableLabel);
       if (orderTableNumber !== tableNumber) {
         return;
       }
-      setLastOrder(order);
+      setLastOrder(normalizedOrder);
+      setTrackedOrders((current) => {
+        const withoutCurrent = current.filter(
+          (entry) => entry.orderNumber !== normalizedOrder.orderNumber,
+        );
+        return [normalizedOrder, ...withoutCurrent]
+          .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
+          .filter((entry) => isOrderWithinTrackWindow(entry))
+          .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a))
+          .slice(0, 30);
+      });
+      setTrackerPageIndex(0);
       setShowOrderTracker(true);
-      localStorage.setItem(getStoredOrderKey(), JSON.stringify(order));
+      localStorage.setItem(getStoredOrderKey(), JSON.stringify(normalizedOrder));
 
       // Show initial order placed notification
       setNotification({
         type: 'success',
         title: 'Order Placed!',
-        message: `Order #${order.orderNumber} has been placed successfully.`
+        message: `Order #${normalizedOrder.orderNumber} has been placed successfully.`
       });
       setTimeout(() => setNotification(null), 5000);
     };
@@ -2189,15 +2521,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           filter: `order_number=eq.${lastOrder.orderNumber}`,
         },
         (payload) => {
-          const nextStatusRaw = String(payload.new?.status ?? "placed");
-          const nextStatus: StoredOrder["status"] =
-            nextStatusRaw === "confirmed" || nextStatusRaw === "accepted"
-              ? "confirmed"
-              : nextStatusRaw === "preparing" || nextStatusRaw === "ready"
-                ? "preparing"
-                : nextStatusRaw === "served" || nextStatusRaw === "completed"
-                  ? "served"
-                  : "placed";
+          const nextStatus = normalizeTrackedStatus(payload.new?.status);
 
           updateOrderStatus(
             nextStatus,
@@ -2227,7 +2551,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       }
       try {
         const response = await fetchOrderStatus(orderNumber);
-        const nextStatus = response.order.status;
+        const nextStatus = normalizeTrackedStatus(response.order.status);
         if (!cancelled) {
           updateOrderStatus(nextStatus, getOrderStatusMessage(nextStatus), orderNumber);
         }
@@ -2815,12 +3139,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         <DropdownMenuContent align="end" sideOffset={8} className="w-56 rounded-xl">
           <DropdownMenuLabel className="py-2">
             <p className="text-sm font-semibold text-gray-900 heading-font">{displayName}</p>
-            <p className="text-xs text-gray-500 subtext-font">This device</p>
+            <p className="text-xs text-gray-500 subtext-font">{accountEmail || "Add name and email"}</p>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={handleEditDisplayName} className="cursor-pointer">
+          <DropdownMenuItem onClick={openAccountDrawer} className="cursor-pointer">
             <Pencil size={16} />
-            <span className="heading-font">Edit name</span>
+            <span className="heading-font">Account</span>
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setShowPastOrdersModal(true)}
@@ -2829,9 +3153,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
             <ClipboardList size={16} />
             <span className="heading-font">View past order</span>
           </DropdownMenuItem>
-          {lastOrder ? (
+          {hasTrackableOrders ? (
             <DropdownMenuItem
-              onClick={() => setShowOrderTracker(true)}
+              onClick={openTrackerPanel}
               className="cursor-pointer"
             >
               <BellRing size={16} />
@@ -3070,12 +3394,12 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                     <ClipboardList size={16} />
                     <span className="heading-font">View past order</span>
                   </button>
-                  {lastOrder ? (
+                  {hasTrackableOrders ? (
                     <button
                       type="button"
                       onClick={() => {
                         setShowSidebarMenu(false);
-                        setShowOrderTracker(true);
+                        openTrackerPanel();
                       }}
                       className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
                     >
@@ -3100,6 +3424,103 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 </div>
               </div>
             </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showAccountDrawer && (
+          <>
+            <motion.button
+              type="button"
+              className="fixed inset-0 z-[70] bg-black/45"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAccountDrawer(false)}
+              aria-label="Close account drawer"
+            />
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 250, damping: 28 }}
+              className="fixed inset-x-0 bottom-0 z-[80] rounded-t-[30px] bg-white shadow-2xl"
+            >
+              <div className="p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xl font-semibold text-gray-900 heading-font">Account</p>
+                    <p className="mt-1 text-sm text-gray-500 subtext-font">
+                      Save your name and email on this device.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAccountDrawer(false)}
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100"
+                    aria-label="Close account drawer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <form
+                  className="mt-5 space-y-4 pb-[max(env(safe-area-inset-bottom),1rem)]"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleSaveAccountProfile();
+                  }}
+                >
+                  {accountSaveError ? (
+                    <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 subtext-font">
+                      {accountSaveError}
+                    </p>
+                  ) : null}
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 subtext-font">Name</label>
+                    <input
+                      type="text"
+                      value={displayNameDraft}
+                      onChange={(event) => setDisplayNameDraft(event.target.value)}
+                      maxLength={32}
+                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                      placeholder="Enter your name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 subtext-font">Email</label>
+                    <input
+                      type="email"
+                      value={accountEmailDraft}
+                      onChange={(event) => setAccountEmailDraft(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                      placeholder="you@example.com"
+                    />
+                  </div>
+
+                  <p className="text-xs text-gray-500 subtext-font">
+                    This information is saved on this device.
+                  </p>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowAccountDrawer(false)}
+                      className="w-1/2 rounded-2xl border border-gray-300 px-4 py-3 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 heading-font"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="w-1/2 rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-900 heading-font"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
           </>
         )}
       </AnimatePresence>
@@ -3373,11 +3794,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                         <LifeBuoy size={16} />
                         <span className="heading-font">Support</span>
                       </button>
-                      {lastOrder ? (
+                      {hasTrackableOrders ? (
                         <button
                           type="button"
                           onClick={() => {
-                            setShowOrderTracker(true);
+                            openTrackerPanel();
                             closeAuthDrawer();
                           }}
                           className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left text-sm text-gray-800 transition-colors hover:bg-gray-50"
@@ -3510,8 +3931,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         </div>
       )}
 
-      {showOrderTracker && lastOrder && (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 px-4 pb-[1.1rem] pt-3 backdrop-blur">
+      {showOrderTracker && currentTrackedOrder && (
+        <div ref={orderTrackerBarRef} className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white/95 px-4 pb-[1.1rem] pt-3 backdrop-blur">
           <div className="rounded-3xl border border-gray-200 bg-white px-4 py-4 shadow-sm">
             <div className="grid grid-cols-4 gap-2">
               {[0, 1, 2, 3].map((step) => {
@@ -3519,12 +3940,16 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                   placed: 0,
                   confirmed: 1,
                   preparing: 2,
+                  ready: 3,
                   served: 3,
                 };
-                const currentStep = statusStepMap[lastOrder.status];
+                const currentStep = statusStepMap[currentTrackedOrder.status];
+                const isTerminalStep =
+                  currentTrackedOrder.status === "ready" ||
+                  currentTrackedOrder.status === "served";
                 const isCompletedStep = step < currentStep;
-                const isCurrentAnimatedStep = step === currentStep && lastOrder.status !== "served";
-                const isFilledStep = isCompletedStep || lastOrder.status === "served";
+                const isCurrentAnimatedStep = !isTerminalStep && step === currentStep;
+                const isFilledStep = isCompletedStep || (isTerminalStep && step <= currentStep);
 
                 if (isCurrentAnimatedStep) {
                   return (
@@ -3555,13 +3980,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
             <div className="mt-3 flex items-start justify-between gap-3">
               <div>
                 <p className="text-base font-semibold text-gray-900 heading-font">
-                  {lastOrder.status === 'placed' && 'Order placed'}
-                  {lastOrder.status === 'confirmed' && 'Order confirmed'}
-                  {lastOrder.status === 'preparing' && 'Your order is being prepared'}
-                  {lastOrder.status === 'served' && 'Order served - Enjoy your meal!'}
+                  {currentTrackedOrder.status === 'placed' && 'Order placed'}
+                  {currentTrackedOrder.status === 'confirmed' && 'Order confirmed'}
+                  {currentTrackedOrder.status === 'preparing' && 'Your order is being prepared'}
+                  {currentTrackedOrder.status === 'ready' && 'Your order is ready'}
+                  {currentTrackedOrder.status === 'served' && 'Order served - Enjoy your meal!'}
                 </p>
                 <p className="mt-1 text-xs text-gray-500 subtext-font">
-                  Order #{lastOrder.orderNumber} will be served to {lastOrder.tableLabel}.
+                  Order #{currentTrackedOrder.orderNumber} will be served to {currentTrackedOrder.tableLabel}.
                 </p>
               </div>
               <button
@@ -3572,6 +3998,33 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 Dismiss
               </button>
             </div>
+            {trackableOrders.length > 1 ? (
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTrackerPageIndex((current) => Math.max(0, current - 1))}
+                  disabled={trackerPageIndex === 0}
+                  className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Prev
+                </button>
+                <span className="text-xs text-gray-500 subtext-font">
+                  {trackerPageIndex + 1} / {trackableOrders.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTrackerPageIndex((current) =>
+                      Math.min(trackableOrders.length - 1, current + 1),
+                    )
+                  }
+                  disabled={trackerPageIndex >= trackableOrders.length - 1}
+                  className="rounded-full border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
@@ -3579,15 +4032,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       <button
         type="button"
         onClick={handleCallWaiter}
-        className={`fixed right-4 z-40 flex items-center gap-2 rounded-full bg-black px-4 py-3 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-gray-900 heading-font ${
-          showOrderTracker && lastOrder && getCartItemCount() > 0
-            ? "bottom-40"
-            : showOrderTracker && lastOrder
-              ? "bottom-28"
-              : getCartItemCount() > 0
-                ? "bottom-24"
-                : "bottom-6"
-        }`}
+        className="fixed right-4 z-40 flex items-center gap-2 rounded-full bg-black px-4 py-3 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-gray-900 heading-font"
+        style={{ bottom: `calc(env(safe-area-inset-bottom, 0px) + ${callWaiterBottomOffset}px)` }}
       >
         <BellRing size={18} />
         <span>Call waiter</span>
@@ -3596,8 +4042,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       {/* Sticky View Cart Bar */}
       {getCartItemCount() > 0 && (
         <div
+          ref={cartBarRef}
           className={`fixed inset-x-0 z-30 px-4 pb-[1.1rem] pt-2 bg-white/95 backdrop-blur border-t border-gray-200 ${
-            showOrderTracker && lastOrder ? "bottom-24" : "bottom-0"
+            showOrderTracker && currentTrackedOrder ? "bottom-24" : "bottom-0"
           }`}
         >
           <button
@@ -3645,31 +4092,6 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
             <div className="flex items-center gap-1">
               <Clock size={16} className="text-gray-500" />
               <span>House service: {RESTAURANT.hours}</span>
-            </div>
-          </div>
-
-          <div className="mt-5 space-y-3 text-sm font-medium">
-            <div className="flex items-center bg-gray-100 rounded-full px-1 py-1 shadow-inner heading-font border border-gray-200 w-full max-w-[360px]">
-              <button
-                onClick={() => setServiceType("table")}
-                className={`flex-1 px-4 py-1.5 rounded-full transition-all text-sm font-semibold ${
-                  serviceType === "table"
-                    ? "bg-white shadow text-black"
-                    : "text-gray-600"
-                }`}
-              >
-                Table service
-              </button>
-              <button
-                onClick={() => setServiceType("takeaway")}
-                className={`flex-1 px-4 py-1.5 rounded-full transition-all text-sm font-semibold ${
-                  serviceType === "takeaway"
-                    ? "bg-white shadow text-black"
-                    : "text-gray-600"
-                }`}
-              >
-                Take-away
-              </button>
             </div>
           </div>
 
@@ -4214,7 +4636,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                         : "bg-black text-white"
                     }`}
                   >
-                    Add {itemQuantity + selectedSuggestedItems.length} to order â€¢ Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
+                    Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
                   </button>
                 </div>
               </div>
@@ -4507,7 +4929,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xl font-semibold text-gray-900 heading-font">Past order</p>
-                  <p className="mt-1 text-sm text-gray-500 subtext-font">Your most recent order details.</p>
+                  <p className="mt-1 text-sm text-gray-500 subtext-font">Your completed orders for this device.</p>
                 </div>
                 <button
                   type="button"
@@ -4518,38 +4940,63 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
                 </button>
               </div>
 
-              {lastOrder ? (
-                <div className="mt-5 space-y-4">
-                  <div className="rounded-2xl bg-gray-50 p-4">
-                    <p className="text-sm font-semibold text-gray-900 heading-font">Order #{lastOrder.orderNumber}</p>
-                    <p className="mt-1 text-sm text-gray-500 subtext-font">{lastOrder.tableLabel}</p>
-                    <p className="mt-2 text-lg font-semibold text-gray-900 heading-font">
-                      Rs.{lastOrder.total.toLocaleString()}
-                    </p>
-                  </div>
-
-                  <div className="max-h-72 space-y-3 overflow-y-auto pr-1">
-                    {lastOrder.items.map((item) => (
-                      <div key={`${item.name}-${item.details || "base"}`} className="flex items-start justify-between gap-4">
+                            {pastOrdersLoading ? (
+                <div className="mt-5 rounded-2xl bg-gray-50 p-5 text-center">
+                  <p className="text-sm font-semibold text-gray-900 heading-font">Loading orders...</p>
+                </div>
+              ) : pastOrders.length > 0 ? (
+                <div className="mt-5 max-h-[68vh] space-y-4 overflow-y-auto pr-1">
+                  {pastOrders.map((order) => (
+                    <div key={order.orderNumber} className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-gray-900 heading-font">{item.name}</p>
-                          {item.details ? (
-                            <p className="mt-1 text-xs text-gray-500 subtext-font">{item.details}</p>
-                          ) : null}
-                          <p className="mt-1 text-xs text-gray-400 subtext-font">Qty {item.quantity}</p>
+                          <p className="text-sm font-semibold text-gray-900 heading-font">
+                            Order #{order.orderNumber}
+                          </p>
+                          <p className="mt-0.5 text-xs text-gray-500 subtext-font">
+                            {order.tableLabel}
+                            {order.placedAt
+                              ? ` • ${new Date(order.placedAt).toLocaleString()}`
+                              : ""}
+                          </p>
                         </div>
-                        <p className="text-sm font-semibold text-gray-900 heading-font">
-                          Rs.{(item.price * item.quantity).toLocaleString()}
-                        </p>
+                        <div className="text-right">
+                          <p className="text-sm font-semibold text-gray-900 heading-font">
+                            Rs.{order.total.toLocaleString()}
+                          </p>
+                          <p className="mt-0.5 text-xs font-medium text-gray-500 subtext-font">
+                            {order.status === "ready" ? "Ready" : "Served"}
+                          </p>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+
+                      <div className="mt-3 space-y-2">
+                        {order.items.map((item, index) => (
+                          <div
+                            key={`${order.orderNumber}-${item.name}-${index}`}
+                            className="flex items-start justify-between gap-4"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900 heading-font">{item.name}</p>
+                              {item.details ? (
+                                <p className="mt-1 text-xs text-gray-500 subtext-font">{item.details}</p>
+                              ) : null}
+                              <p className="mt-1 text-xs text-gray-400 subtext-font">Qty {item.quantity}</p>
+                            </div>
+                            <p className="text-sm font-semibold text-gray-900 heading-font">
+                              Rs.{(item.price * item.quantity).toLocaleString()}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="mt-5 rounded-2xl bg-gray-50 p-5 text-center">
                   <p className="text-sm font-semibold text-gray-900 heading-font">No past orders yet</p>
                   <p className="mt-1 text-sm text-gray-500 subtext-font">
-                    Your most recent order will show up here after checkout.
+                    Your completed orders for this device will show up here.
                   </p>
                 </div>
               )}
@@ -4925,3 +5372,21 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     </motion.div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

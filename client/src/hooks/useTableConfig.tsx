@@ -1,4 +1,4 @@
-import {
+﻿import {
   PropsWithChildren,
   createContext,
   useCallback,
@@ -189,9 +189,10 @@ export const useTableConfig = (): TableConfigContextValue => {
 };
 
 export const getTableUrl = (table: TableConfig) =>
-  `/menu?table=${encodeURIComponent(table.name)}`;
+  `/sip/menu?table=${encodeURIComponent(table.name)}`;
 
 export const getCheckoutUrl = (
   table: TableConfig,
   type: string = "pay-fully",
 ) => `/checkout/${type}?table=${encodeURIComponent(table.name)}`;
+

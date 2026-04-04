@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import {
   Copy,
   ExternalLink,
@@ -42,9 +42,9 @@ type QrCodeRecord = {
 
 const buildTableUrl = (tableNumber: number) => {
   if (typeof window === "undefined") {
-    return `/menu?table=Table${tableNumber}`;
+    return `/sip/menu?table=Table${tableNumber}`;
   }
-  return `${window.location.origin}/menu?table=${encodeURIComponent(`Table${tableNumber}`)}`;
+  return `${window.location.origin}/sip/menu?table=${encodeURIComponent(`Table${tableNumber}`)}`;
 };
 
 const createQrImageUrl = (url: string, size = 280) =>
@@ -212,7 +212,7 @@ export default function RestaurantAdminQrManagement() {
                       <p className="text-sm text-muted-foreground">{statusMessage}</p>
                     ) : null}
                     <p className="text-sm text-muted-foreground">
-                      Example URL: <span className="font-medium">/menu?table=Table3</span>
+                      Example URL: <span className="font-medium">/sip/menu?table=Table3</span>
                     </p>
                   </CardContent>
                 </Card>
@@ -372,7 +372,7 @@ export default function RestaurantAdminQrManagement() {
                 <CardContent className="space-y-2 text-sm text-muted-foreground">
                   <p>1. Create a QR for a table number (for example, table 3).</p>
                   <p>2. Print and place that QR on the matching table.</p>
-                  <p>3. When scanned, guests open: /menu?table=Table3.</p>
+                  <p>3. When scanned, guests open: /sip/menu?table=Table3.</p>
                 </CardContent>
               </Card>
             </div>
@@ -382,3 +382,4 @@ export default function RestaurantAdminQrManagement() {
     </SidebarProvider>
   );
 }
+

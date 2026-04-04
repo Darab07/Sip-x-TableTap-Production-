@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 
-type OrderStatus = "Confirmed" | "Preparing" | "Served"
+type OrderStatus = "Confirmed" | "Preparing" | "Completed"
 type DateRangeFilter = "today" | "this-week" | "this-month"
 
 type OrderRow = {
@@ -46,7 +46,7 @@ const formatDateTime = (value: string) =>
   })
 
 const getStatusClass = (status: OrderStatus) => {
-  if (status === "Served") {
+  if (status === "Completed") {
     return "border-green-200 bg-green-50 text-green-700"
   }
 
@@ -189,7 +189,7 @@ export function OrdersOverview() {
                 <SelectItem value="all">All statuses</SelectItem>
                 <SelectItem value="confirmed">Confirmed</SelectItem>
                 <SelectItem value="preparing">Preparing</SelectItem>
-                <SelectItem value="served">Served</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -280,3 +280,4 @@ export function OrdersOverview() {
     </Card>
   )
 }
+

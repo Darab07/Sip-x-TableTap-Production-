@@ -41,11 +41,11 @@ export function SectionCards() {
   }, [])
 
   return (
-    <div className="*:data-[slot=card]:shadow-xs grid grid-cols-1 gap-4 px-4 md:grid-cols-3 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card dark:*:data-[slot=card]:bg-card lg:px-6">
+    <div className="*:data-[slot=card]:shadow-xs grid grid-cols-1 gap-4 md:grid-cols-3 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card dark:*:data-[slot=card]:bg-card">
       <Card className="@container/card">
-        <CardHeader className="relative">
+        <CardHeader className="relative pr-20">
           <CardDescription>Total sales through TableTap</CardDescription>
-          <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
+          <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
             Rs. {cards.totalSales.toLocaleString("en-PK")}
           </CardTitle>
           <div className="absolute right-4 top-4">
@@ -58,7 +58,7 @@ export function SectionCards() {
             </Badge>
           </div>
         </CardHeader>
-        <CardFooter className="flex-col items-start gap-1 text-sm">
+        <CardFooter className="pt-0 flex-col items-start gap-1 text-sm">
           <div className="flex gap-2 font-medium text-green-700">
             Trending up this month <TrendingUpIcon className="size-4" />
           </div>
@@ -68,9 +68,9 @@ export function SectionCards() {
         </CardFooter>
       </Card>
       <Card className="@container/card">
-        <CardHeader className="relative">
+        <CardHeader className="relative pr-20">
           <CardDescription>Total orders</CardDescription>
-          <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
+          <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
             {cards.totalOrders.toLocaleString("en-US")}
           </CardTitle>
           <div className="absolute right-4 top-4">
@@ -83,7 +83,7 @@ export function SectionCards() {
             </Badge>
           </div>
         </CardHeader>
-        <CardFooter className="flex-col items-start gap-1 text-sm">
+        <CardFooter className="pt-0 flex-col items-start gap-1 text-sm">
           <div className="flex gap-2 font-medium text-red-700">
             Orders dipped this week <TrendingDownIcon className="size-4" />
           </div>
@@ -93,9 +93,9 @@ export function SectionCards() {
         </CardFooter>
       </Card>
       <Card className="@container/card">
-        <CardHeader className="relative">
+        <CardHeader className="relative pr-20">
           <CardDescription>Average order value</CardDescription>
-          <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
+          <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
             Rs. {Math.round(cards.averageOrderValue).toLocaleString("en-PK")}
           </CardTitle>
           <div className="absolute right-4 top-4">
@@ -108,7 +108,7 @@ export function SectionCards() {
             </Badge>
           </div>
         </CardHeader>
-        <CardFooter className="flex-col items-start gap-1 text-sm">
+        <CardFooter className="pt-0 flex-col items-start gap-1 text-sm">
           <div className="flex gap-2 font-medium text-green-700">
             Basket size is improving <TrendingUpIcon className="size-4" />
           </div>

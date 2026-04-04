@@ -62,6 +62,12 @@ export const createApp = (): Express => {
       "Origin, X-Requested-With, Content-Type, Accept, Authorization",
     );
     res.header("Access-Control-Allow-Credentials", "true");
+    if (req.path.startsWith("/api")) {
+      res.header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.header("Pragma", "no-cache");
+      res.header("Expires", "0");
+      res.header("Surrogate-Control", "no-store");
+    }
     if (req.method === "OPTIONS") {
       res.sendStatus(200);
       return;
@@ -75,3 +81,4 @@ export const createApp = (): Express => {
 
   return app;
 };
+

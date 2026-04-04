@@ -174,6 +174,9 @@ export default function RestaurantManagerTableManagement({
       : null
 
   const markUnavailable = async (tableId: string) => {
+    const previous = tables.find((table) => table.id === tableId)
+    if (!previous) return
+
     setTables((current) =>
       current.map((table) =>
         table.id === tableId
@@ -195,11 +198,17 @@ export default function RestaurantManagerTableManagement({
       await updateManagerTableAvailabilityApi(tableId, "unavailable")
       await syncTables()
     } catch (error) {
+      setTables((current) =>
+        current.map((table) => (table.id === tableId ? previous : table))
+      )
       console.warn("Failed to mark table unavailable:", error)
     }
   }
 
   const markAvailable = async (tableId: string) => {
+    const previous = tables.find((table) => table.id === tableId)
+    if (!previous) return
+
     setTables((current) =>
       current.map((table) =>
         table.id === tableId
@@ -221,11 +230,18 @@ export default function RestaurantManagerTableManagement({
       await updateManagerTableAvailabilityApi(tableId, "available")
       await syncTables()
     } catch (error) {
+      setTables((current) =>
+        current.map((table) => (table.id === tableId ? previous : table))
+      )
       console.warn("Failed to mark table available:", error)
     }
   }
 
-  const hasLinkedOrder = (table: TableSession) => table.orderId !== null
+  const hasLinkedOrder = (table: TableSession) => {
+    const normalizedStatus = table.orderStatus.trim().toLowerCase()
+    const isActiveStatus = ["new", "accepted", "confirmed", "preparing", "ready"].includes(normalizedStatus)
+    return table.orderId !== null && isActiveStatus
+  }
 
   const openLinkedOrder = (table: TableSession) => {
     if (!table.orderId) {
@@ -614,3 +630,4 @@ export default function RestaurantManagerTableManagement({
     </SidebarProvider>
   )
 }
+

@@ -91,7 +91,7 @@ export function DataTable({ data }: { data: z.infer<typeof schema>[] }) {
   )
 
   return (
-    <Card className="mx-4 lg:mx-6">
+    <Card className="">
       <CardHeader className="gap-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>

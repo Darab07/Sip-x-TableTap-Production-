@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { Switch, Route, useLocation, Redirect } from "wouter";
 import { AnimatePresence } from "framer-motion";
 import Menu from "@/pages/menu";
@@ -26,7 +26,7 @@ const createRedirectComponent =
 
 const AppRouter = () => {
   const [location] = useLocation();
-  const defaultMenuRoute = "/menu";
+  const defaultMenuRoute = "/sip/menu";
   const hasOwnerAccess = isRestaurantAuthenticated("owner");
   const hasManagerAccess = isRestaurantAuthenticated("manager");
   const hasAdminAccess = isRestaurantAuthenticated("admin");
@@ -35,6 +35,8 @@ const AppRouter = () => {
   return (
     <AnimatePresence mode="wait">
       <Switch location={location} key={location}>
+        <Route path="/sip/menu/:menuPath*" component={Menu} />
+        <Route path="/sip/menu" component={Menu} />
         <Route path="/menu/:menuPath*" component={Menu} />
         <Route path="/menu" component={Menu} />
         <Route path="/checkout/:type" component={Checkout} />
@@ -234,3 +236,5 @@ const AppRouter = () => {
 };
 
 export default AppRouter;
+
+

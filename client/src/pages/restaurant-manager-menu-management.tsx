@@ -56,13 +56,6 @@ type RestaurantManagerMenuManagementProps = {
 
 const formatPrice = (value: number) => `Rs. ${value.toLocaleString("en-PK")}`
 
-const formatUpdatedAt = (value: string) =>
-  new Date(value).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
 
 const getAvailabilityClass = (available: boolean) =>
   available
@@ -158,6 +151,9 @@ export default function RestaurantManagerMenuManagement({
       : null
 
   const setItemAvailability = async (itemId: string, available: boolean) => {
+    const previous = items.find((item) => item.id === itemId)
+    if (!previous) return
+
     const now = new Date().toISOString()
     setItems((current) =>
       current.map((item) =>
@@ -167,6 +163,17 @@ export default function RestaurantManagerMenuManagement({
     try {
       await updateManagerMenuItemApi({ itemId, available })
     } catch (error) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                available: previous.available,
+                updatedAt: previous.updatedAt,
+              }
+            : item
+        )
+      )
       console.warn("Failed to update item availability:", error)
     }
   }
@@ -196,6 +203,8 @@ export default function RestaurantManagerMenuManagement({
 
     const roundedPrice = Math.round(parsedPrice)
     const now = new Date().toISOString()
+    const previousPrice = editingItem.price
+    const previousUpdatedAt = editingItem.updatedAt
 
     setItems((current) =>
       current.map((item) =>
@@ -209,10 +218,21 @@ export default function RestaurantManagerMenuManagement({
         itemId: editingItem.id,
         price: roundedPrice,
       })
+      closePriceEditor()
     } catch (error) {
+      setItems((current) =>
+        current.map((item) =>
+          item.id === editingItem.id
+            ? {
+                ...item,
+                price: previousPrice,
+                updatedAt: previousUpdatedAt,
+              }
+            : item
+        )
+      )
       console.warn("Failed to update item price:", error)
     }
-    closePriceEditor()
   }
 
   return (
@@ -308,10 +328,7 @@ export default function RestaurantManagerMenuManagement({
                                 <p className="text-xs text-muted-foreground">Price</p>
                                 <p className="text-sm font-medium">{formatPrice(item.price)}</p>
                               </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Last Updated</p>
-                                <p className="text-sm font-medium">{formatUpdatedAt(item.updatedAt)}</p>
-                              </div>
+
                             </div>
                             <div className="mt-3">
                               <div className="flex flex-wrap gap-2">
@@ -361,9 +378,7 @@ export default function RestaurantManagerMenuManagement({
                                   <div className="space-y-0.5">
                                     <p className="font-medium leading-none">{item.name}</p>
                                     <p className="text-xs text-muted-foreground">{item.category}</p>
-                                    <p className="text-xs text-muted-foreground">
-                                      Updated {formatUpdatedAt(item.updatedAt)}
-                                    </p>
+
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-right font-medium">
@@ -425,7 +440,6 @@ export default function RestaurantManagerMenuManagement({
                               <TableHead>Category</TableHead>
                               <TableHead className="text-right">Price</TableHead>
                               <TableHead>Availability Status</TableHead>
-                              <TableHead>Last Updated</TableHead>
                               <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                           </TableHeader>
@@ -445,7 +459,6 @@ export default function RestaurantManagerMenuManagement({
                                     {item.available ? "Available" : "Out of Stock"}
                                   </Badge>
                                 </TableCell>
-                                <TableCell>{formatUpdatedAt(item.updatedAt)}</TableCell>
                                 <TableCell className="text-right">
                                   <div className="flex justify-end gap-2">
                                     <Button
@@ -528,3 +541,4 @@ export default function RestaurantManagerMenuManagement({
     </SidebarProvider>
   )
 }
+

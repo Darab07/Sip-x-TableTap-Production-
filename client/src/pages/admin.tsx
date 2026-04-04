@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { motion } from 'framer-motion';
 import { Plus, Trash2, Copy, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -157,15 +157,16 @@ export default function Admin() {
         <div className="mt-6 bg-blue-50 rounded-lg p-4">
           <h3 className="text-sm font-semibold text-blue-900 mb-2">How to Use</h3>
           <div className="text-xs text-blue-800 space-y-1">
-            <p>• <strong>Add:</strong> Creates a new table URL</p>
-            <p>• <strong>Remove:</strong> Removes table from configuration</p>
-            <p>• <strong>Toggle:</strong> Enable/disable tables</p>
-            <p>• <strong>Copy:</strong> Copy URL to clipboard</p>
-            <p>• <strong>Open:</strong> Open table page</p>
-            <p className="mt-2 font-medium">Note: URLs now use /menu?table=TableX</p>
+            <p>â€¢ <strong>Add:</strong> Creates a new table URL</p>
+            <p>â€¢ <strong>Remove:</strong> Removes table from configuration</p>
+            <p>â€¢ <strong>Toggle:</strong> Enable/disable tables</p>
+            <p>â€¢ <strong>Copy:</strong> Copy URL to clipboard</p>
+            <p>â€¢ <strong>Open:</strong> Open table page</p>
+            <p className="mt-2 font-medium">Note: URLs now use /sip/menu?table=TableX</p>
           </div>
         </div>
       </div>
     </motion.div>
   );
 }
+

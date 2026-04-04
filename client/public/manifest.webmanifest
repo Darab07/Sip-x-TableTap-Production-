@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "TableTap",
   "short_name": "TableTap",
   "description": "Track your table orders and receive status updates.",
-  "start_url": "/menu",
+  "start_url": "/sip/menu",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f3f2ef",
@@ -20,3 +20,4 @@
     }
   ]
 }
+

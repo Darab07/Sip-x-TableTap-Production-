@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { useLocation } from "wouter"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 export function SiteHeader({
   title = "Dashboard",
@@ -11,7 +12,10 @@ export function SiteHeader({
   actions?: ReactNode
 }) {
   const [location] = useLocation()
-  const showSidebarTrigger = location.startsWith("/restaurant/manager")
+  const isMobile = useIsMobile()
+  const showSidebarTrigger =
+    location.startsWith("/restaurant/manager") ||
+    (isMobile && location.startsWith("/restaurant"))
 
   return (
     <header className="group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 flex min-h-12 shrink-0 items-center gap-2 border-b py-2 transition-[width,height] ease-linear">

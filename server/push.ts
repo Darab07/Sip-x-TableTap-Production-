@@ -1,4 +1,4 @@
-import webpush from "web-push";
+﻿import webpush from "web-push";
 import { log } from "./app.js";
 
 type OrderStatus = "placed" | "confirmed" | "preparing" | "served";
@@ -99,7 +99,7 @@ const buildPayload = (
     icon: "/logo.png",
     badge: "/logo.png",
     data: {
-      url: "/menu",
+      url: "/sip/menu",
       orderNumber,
       status,
     },
@@ -193,3 +193,4 @@ export const startOrderPushTracking = async ({ userId, orderNumber, tableLabel }
 
   orderTimers.set(orderNumber, timeoutIds);
 };
+

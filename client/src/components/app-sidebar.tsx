@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 import { useLocation } from "wouter"
 import { fetchOutlets } from "@/lib/tabletap-supabase-api"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -99,6 +100,7 @@ export function AppSidebar({
       cancelled = true
     }
   }, [])
+  const isMobile = useIsMobile()
   const resolvedRole =
     dashboardRole ??
     (location.startsWith("/restaurant/manager")
@@ -226,7 +228,7 @@ export function AppSidebar({
   }
   const selectedOutletConfig =
     outlets.find((outlet) => outlet.branchCode === selectedOutlet) ?? outlets[0]
-  const sidebarCollapsibleMode = resolvedRole === "manager" ? "offcanvas" : "none"
+  const sidebarCollapsibleMode = resolvedRole === "manager" ? "offcanvas" : isMobile ? "offcanvas" : "none"
   const sidebarClassName =
     resolvedRole === "owner" ? "md:sticky md:top-0 md:h-svh" : undefined
 
