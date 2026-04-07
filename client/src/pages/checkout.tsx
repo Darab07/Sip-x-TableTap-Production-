@@ -8,6 +8,7 @@ import {
   startServerOrderPushTracking,
 } from "@/lib/push-notifications";
 import { placeOrder } from "@/lib/tabletap-supabase-api";
+import { supabaseBrowser } from "@/lib/supabase";
 import { getDeviceFingerprint } from "@/lib/tabletap-api";
 
 interface CartItem {
@@ -182,8 +183,27 @@ export default function Checkout() {
     const notes = localStorage.getItem(`orderNotes_${userId}`) || "";
     const cartItems = Object.values(cart);
     const deviceFingerprint = getDeviceFingerprint();
-    const customerName = (localStorage.getItem("tabletap_display_name") || "").trim();
-    const customerEmail = (localStorage.getItem("tabletap_account_email") || "").trim().toLowerCase();
+
+    if (!supabaseBrowser) {
+      window.alert("Auth is not configured right now. Please try again shortly.");
+      return;
+    }
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabaseBrowser.auth.getSession();
+
+    if (sessionError || !session) {
+      window.alert("Please log in or sign up before placing an order.");
+      setLocation(`/sip/menu${search}`);
+      return;
+    }
+
+    const customerEmail = String(session.user.email ?? "").trim().toLowerCase();
+    const customerName =
+      String(session.user.user_metadata?.display_name ?? "").trim() ||
+      (customerEmail ? customerEmail.split("@")[0] : "");
 
     let orderData: StoredOrder;
     setIsPlacingOrder(true);
@@ -625,5 +645,7 @@ export default function Checkout() {
     </motion.div>
   );
 }
+
+
 
 

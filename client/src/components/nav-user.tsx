@@ -6,6 +6,7 @@ import {
 } from "lucide-react"
 import { useLocation } from "wouter"
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
+import { supabaseBrowser } from "@/lib/supabase"
 
 import {
   Avatar,
@@ -100,14 +101,20 @@ export function NavUser({
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                clearRestaurantAuthentication()
-                if (location.startsWith("/restaurant/manager")) {
-                  setLocation("/restaurant/manager")
-                  return
-                }
+              onSelect={async () => {
+                try {
+                  if (supabaseBrowser) {
+                    await supabaseBrowser.auth.signOut()
+                  }
+                } finally {
+                  clearRestaurantAuthentication()
+                  if (location.startsWith("/restaurant/manager")) {
+                    setLocation("/restaurant/manager")
+                    return
+                  }
 
-                setLocation("/restaurant")
+                  setLocation("/restaurant")
+                }
               }}
             >
               <LogOutIcon />
@@ -119,3 +126,4 @@ export function NavUser({
     </SidebarMenu>
   )
 }
+

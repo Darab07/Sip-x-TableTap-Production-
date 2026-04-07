@@ -121,6 +121,8 @@ const menuNameLookupCache = new Map<
   { expiresAt: number; value: Map<string, string> }
 >();
 
+let ordersHasCustomerAuthUserIdColumn: boolean | null = null;
+
 const invalidateOutletDerivedCaches = (outletId: string) => {
   menuNameLookupCache.delete(outletId);
   outletCache.forEach((cachedOutlet, branchCode) => {
@@ -128,6 +130,39 @@ const invalidateOutletDerivedCaches = (outletId: string) => {
       menuCatalogCache.delete(branchCode);
     }
   });
+};
+
+const hasOrdersCustomerAuthUserIdColumn = async () => {
+  if (ordersHasCustomerAuthUserIdColumn !== null) {
+    return ordersHasCustomerAuthUserIdColumn;
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const { error } = await supabase
+    .from("orders")
+    .select("customer_auth_user_id")
+    .limit(1);
+
+  if (error) {
+    const message = String(error.message ?? "").toLowerCase();
+    const isMissingColumn =
+      message.includes("customer_auth_user_id") &&
+      (message.includes("does not exist") || message.includes("column"));
+    if (isMissingColumn) {
+      ordersHasCustomerAuthUserIdColumn = false;
+      return false;
+    }
+
+    console.warn(
+      "Could not inspect orders.customer_auth_user_id column. Falling back to legacy identity mapping:",
+      error.message,
+    );
+    ordersHasCustomerAuthUserIdColumn = false;
+    return false;
+  }
+
+  ordersHasCustomerAuthUserIdColumn = true;
+  return ordersHasCustomerAuthUserIdColumn;
 };
 
 export const getOutletByBranchCode = async (branchCode = DEFAULT_BRANCH) => {
@@ -322,6 +357,7 @@ export type PlaceOrderInput = {
   branchCode?: string;
   tableNumber: number;
   deviceFingerprint?: string;
+  customerAuthUserId?: string;
   customerName?: string;
   customerEmail?: string;
   notes?: string;
@@ -716,6 +752,9 @@ export const placeOrderInSupabase = async (
   const outlet = await getOutletByBranchCode(branchCode);
   const tableNumber = Math.round(input.tableNumber);
   const tableAccess = await getPublicTableAccess(branchCode, tableNumber);
+  const normalizedCustomerAuthUserId =
+    String(input.customerAuthUserId ?? "").trim() || null;
+  const hasAuthUserColumn = await hasOrdersCustomerAuthUserIdColumn();
   if (!tableAccess.orderingEnabled) {
     throw new Error(tableAccess.message);
   }
@@ -836,7 +875,7 @@ export const placeOrderInSupabase = async (
   const duplicateGuardQuery = await supabase
     .from("orders")
     .select(
-      "id,order_number,status,subtotal,tip_amount,service_fee,tax_amount,total_amount,notes,placed_at,customer_device_id,order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+      "id,order_number,status,subtotal,tip_amount,service_fee,tax_amount,total_amount,notes,placed_at,customer_device_id,customer_auth_user_id,order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
     )
     .eq("outlet_id", outlet.id)
     .eq("table_id", table.tableId)
@@ -867,6 +906,7 @@ export const placeOrderInSupabase = async (
     notes: string | null;
     placed_at: string;
     customer_device_id: string | null;
+    customer_auth_user_id: string | null;
     order_items: DuplicateGuardOrderItemRow[] | null;
   };
 
@@ -879,7 +919,14 @@ export const placeOrderInSupabase = async (
       const placedAtMs = new Date(row.placed_at).getTime();
       if (!Number.isFinite(placedAtMs)) return false;
       if (nowMs - placedAtMs > ORDER_DEDUP_WINDOW_MS) return false;
-      if (deviceId && row.customer_device_id !== deviceId) return false;
+      if (hasAuthUserColumn && normalizedCustomerAuthUserId) {
+        if (
+          String(row.customer_auth_user_id ?? "").trim() !==
+          normalizedCustomerAuthUserId
+        ) {
+          return false;
+        }
+      } else if (deviceId && row.customer_device_id !== deviceId) return false;
 
       if (sanitizeMoney(Number(row.subtotal ?? 0)) !== subtotal) return false;
       if (sanitizeMoney(Number(row.tip_amount ?? 0)) !== tipAmount) return false;
@@ -923,6 +970,9 @@ export const placeOrderInSupabase = async (
   const insertOrder = await supabase
     .from("orders")
     .insert({
+      ...(hasAuthUserColumn && normalizedCustomerAuthUserId
+        ? { customer_auth_user_id: normalizedCustomerAuthUserId }
+        : {}),
       outlet_id: outlet.id,
       table_id: table.tableId,
       table_session_id: table.tableSessionId,
@@ -1106,6 +1156,7 @@ const managerToDbStatus: Record<string, string> = {
 export const updateOrderStatusFromManager = async (input: {
   orderNumber: string;
   status: "accepted" | "preparing" | "ready";
+  branchCode?: string;
 }) => {
   const supabase = assertSupabaseAdmin();
   const dbStatus = managerToDbStatus[input.status];
@@ -1118,11 +1169,13 @@ export const updateOrderStatusFromManager = async (input: {
     throw new Error("Order number is required");
   }
 
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
   const selectCols = "id,order_number,status,placed_at";
 
   const byOrderNumber = await supabase
     .from("orders")
     .update({ status: dbStatus })
+    .eq("outlet_id", outlet.id)
     .eq("order_number", normalizedLookup)
     .select(selectCols)
     .order("placed_at", { ascending: false })
@@ -1144,6 +1197,7 @@ export const updateOrderStatusFromManager = async (input: {
     const byId = await supabase
       .from("orders")
       .update({ status: dbStatus })
+      .eq("outlet_id", outlet.id)
       .eq("id", normalizedLookup)
       .select(selectCols)
       .order("placed_at", { ascending: false })
@@ -1172,7 +1226,6 @@ export const updateOrderStatusFromManager = async (input: {
     status: toCustomerTrackerStatus(data.status),
   };
 };
-
 export const getOrderTrackerStatus = async (orderNumber: string) => {
   const supabase = assertSupabaseAdmin();
   const normalizedLookup = orderNumber.trim();
@@ -1233,6 +1286,174 @@ export const getOrderTrackerStatus = async (orderNumber: string) => {
   };
 };
 
+export const getOrderTrackerStatusForCustomer = async (input: {
+  orderNumber: string;
+  customerAuthUserId: string;
+  customerEmail?: string;
+  deviceFingerprint?: string;
+  branchCode?: string;
+}) => {
+  const supabase = assertSupabaseAdmin();
+  const normalizedLookup = input.orderNumber.trim();
+  const normalizedAuthUserId = String(input.customerAuthUserId ?? "").trim();
+  const normalizedEmail = String(input.customerEmail ?? "").trim().toLowerCase();
+
+  if (!normalizedLookup) {
+    throw new Error("Order number is required");
+  }
+  if (!normalizedAuthUserId && !normalizedEmail) {
+    throw new Error("customerAuthUserId or customerEmail is required");
+  }
+
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+  const selectCols = "id,order_number,status,placed_at";
+
+  const hasAuthUserColumn = await hasOrdersCustomerAuthUserIdColumn();
+  if (hasAuthUserColumn && normalizedAuthUserId) {
+    const byUserAndOrderNumber = await supabase
+      .from("orders")
+      .select(selectCols)
+      .eq("outlet_id", outlet.id)
+      .eq("customer_auth_user_id", normalizedAuthUserId)
+      .eq("order_number", normalizedLookup)
+      .order("placed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{
+        id: string;
+        order_number: string;
+        status: string;
+        placed_at: string;
+      }>();
+
+    if (byUserAndOrderNumber.error) {
+      throw new Error(byUserAndOrderNumber.error.message);
+    }
+
+    let userData = byUserAndOrderNumber.data;
+
+    if (!userData && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedLookup)) {
+      const byUserAndOrderId = await supabase
+        .from("orders")
+        .select(selectCols)
+        .eq("outlet_id", outlet.id)
+        .eq("customer_auth_user_id", normalizedAuthUserId)
+        .eq("id", normalizedLookup)
+        .order("placed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<{
+          id: string;
+          order_number: string;
+          status: string;
+          placed_at: string;
+        }>();
+
+      if (byUserAndOrderId.error) {
+        throw new Error(byUserAndOrderId.error.message);
+      }
+      userData = byUserAndOrderId.data;
+    }
+
+    if (userData) {
+      return {
+        id: userData.id,
+        orderNumber: userData.order_number,
+        status: toCustomerTrackerStatus(userData.status),
+      };
+    }
+  }
+
+  const deviceIds = new Set<string>();
+
+  if (normalizedEmail) {
+    const byEmail = await supabase
+      .from("customer_devices")
+      .select("id")
+      .eq("email", normalizedEmail);
+    if (byEmail.error) {
+      throw new Error(byEmail.error.message);
+    }
+    for (const row of byEmail.data ?? []) {
+      const id = String(row.id ?? "").trim();
+      if (id) {
+        deviceIds.add(id);
+      }
+    }
+  }
+
+  const normalizedFingerprint = String(input.deviceFingerprint ?? "").trim();
+  if (normalizedFingerprint) {
+    const byFingerprint = await supabase
+      .from("customer_devices")
+      .select("id")
+      .eq("device_fingerprint", normalizedFingerprint)
+      .maybeSingle<{ id: string }>();
+
+    if (byFingerprint.error) {
+      throw new Error(byFingerprint.error.message);
+    }
+    if (byFingerprint.data?.id) {
+      deviceIds.add(String(byFingerprint.data.id));
+    }
+  }
+
+  if (!deviceIds.size) {
+    throw new Error("Order not found");
+  }
+
+  const byOrderNumber = await supabase
+    .from("orders")
+    .select(selectCols)
+    .eq("outlet_id", outlet.id)
+    .eq("order_number", normalizedLookup)
+    .in("customer_device_id", Array.from(deviceIds))
+    .order("placed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{
+      id: string;
+      order_number: string;
+      status: string;
+      placed_at: string;
+    }>();
+
+  if (byOrderNumber.error) {
+    throw new Error(byOrderNumber.error.message);
+  }
+
+  let data = byOrderNumber.data;
+
+  if (!data && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedLookup)) {
+    const byId = await supabase
+      .from("orders")
+      .select(selectCols)
+      .eq("outlet_id", outlet.id)
+      .eq("id", normalizedLookup)
+      .in("customer_device_id", Array.from(deviceIds))
+      .order("placed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<{
+        id: string;
+        order_number: string;
+        status: string;
+        placed_at: string;
+      }>();
+
+    if (byId.error) {
+      throw new Error(byId.error.message);
+    }
+
+    data = byId.data;
+  }
+
+  if (!data) {
+    throw new Error("Order not found");
+  }
+
+  return {
+    id: data.id,
+    orderNumber: data.order_number,
+    status: toCustomerTrackerStatus(data.status),
+  };
+};
 export type CustomerOrderHistoryItem = {
   orderNumber: string;
   tableLabel: string;
@@ -1252,67 +1473,33 @@ export type CustomerOrderHistoryItem = {
   }>;
 };
 
-export const getCustomerOrderHistoryByDevice = async (input: {
-  deviceFingerprint: string;
-  branchCode?: string;
-  limit?: number;
-}): Promise<CustomerOrderHistoryItem[]> => {
-  if (!input.deviceFingerprint) {
-    throw new Error("deviceFingerprint is required");
-  }
-  const supabase = assertSupabaseAdmin();
-  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
-  const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
+type HistoryOrderItemRow = {
+  item_name_snapshot: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  special_instructions: string | null;
+};
 
-  const deviceLookup = await supabase
-    .from("customer_devices")
-    .select("id")
-    .eq("device_fingerprint", input.deviceFingerprint)
-    .maybeSingle<{ id: string }>();
-  if (deviceLookup.error) {
-    throw new Error(deviceLookup.error.message);
-  }
-  if (!deviceLookup.data?.id) {
-    return [];
-  }
+type HistoryTableRelation = { table_label: string | null } | null;
 
-  const { data, error } = await supabase
-    .from("orders")
-    .select(
-      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
-    )
-    .eq("outlet_id", outlet.id)
-    .eq("customer_device_id", deviceLookup.data.id)
-    .order("placed_at", { ascending: false })
-    .limit(safeLimit);
+type HistoryOrderRow = {
+  order_number: string;
+  status: string;
+  notes: string | null;
+  subtotal: number | null;
+  tip_amount: number | null;
+  service_fee: number | null;
+  tax_amount: number | null;
+  total_amount: number | null;
+  placed_at: string;
+  restaurant_tables: HistoryTableRelation | HistoryTableRelation[];
+  order_items: HistoryOrderItemRow[] | null;
+};
 
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  type HistoryOrderItemRow = {
-    item_name_snapshot: string | null;
-    quantity: number | null;
-    unit_price: number | null;
-    special_instructions: string | null;
-  };
-  type HistoryTableRelation = { table_label: string | null } | null;
-  type HistoryOrderRow = {
-    order_number: string;
-    status: string;
-    notes: string | null;
-    subtotal: number | null;
-    tip_amount: number | null;
-    service_fee: number | null;
-    tax_amount: number | null;
-    total_amount: number | null;
-    placed_at: string;
-    restaurant_tables: HistoryTableRelation | HistoryTableRelation[];
-    order_items: HistoryOrderItemRow[] | null;
-  };
-
-  return (data ?? []).map((raw) => {
-    const row = raw as unknown as HistoryOrderRow;
+const mapHistoryRowsToCustomerOrders = (
+  rows: HistoryOrderRow[],
+): CustomerOrderHistoryItem[] =>
+  rows.map((row) => {
     const tableRelation = Array.isArray(row.restaurant_tables)
       ? row.restaurant_tables[0]
       : row.restaurant_tables;
@@ -1342,8 +1529,181 @@ export const getCustomerOrderHistoryByDevice = async (input: {
       })),
     };
   });
+
+const getCustomerOrderHistoryByDeviceIds = async (input: {
+  outletId: string;
+  deviceIds: string[];
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  const deviceIds = Array.from(
+    new Set(
+      input.deviceIds
+        .map((id) => String(id || "").trim())
+        .filter(Boolean),
+    ),
+  );
+  if (!deviceIds.length) {
+    return [];
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+    )
+    .eq("outlet_id", input.outletId)
+    .in("customer_device_id", deviceIds)
+    .order("placed_at", { ascending: false })
+    .limit(safeLimit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return mapHistoryRowsToCustomerOrders((data ?? []) as unknown as HistoryOrderRow[]);
 };
 
+export const getCustomerOrderHistoryByDevice = async (input: {
+  deviceFingerprint: string;
+  branchCode?: string;
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  if (!input.deviceFingerprint) {
+    throw new Error("deviceFingerprint is required");
+  }
+  const supabase = assertSupabaseAdmin();
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+
+  const deviceLookup = await supabase
+    .from("customer_devices")
+    .select("id")
+    .eq("device_fingerprint", input.deviceFingerprint)
+    .maybeSingle<{ id: string }>();
+  if (deviceLookup.error) {
+    throw new Error(deviceLookup.error.message);
+  }
+  if (!deviceLookup.data?.id) {
+    return [];
+  }
+
+  return getCustomerOrderHistoryByDeviceIds({
+    outletId: outlet.id,
+    deviceIds: [deviceLookup.data.id],
+    limit: input.limit,
+  });
+};
+
+const getCustomerOrderHistoryByAuthUserId = async (input: {
+  outletId: string;
+  customerAuthUserId: string;
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  const normalizedAuthUserId = String(input.customerAuthUserId || "").trim();
+  if (!normalizedAuthUserId) {
+    return [];
+  }
+
+  if (!(await hasOrdersCustomerAuthUserIdColumn())) {
+    return [];
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+    )
+    .eq("outlet_id", input.outletId)
+    .eq("customer_auth_user_id", normalizedAuthUserId)
+    .order("placed_at", { ascending: false })
+    .limit(safeLimit);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return mapHistoryRowsToCustomerOrders((data ?? []) as unknown as HistoryOrderRow[]);
+};
+
+export const getCustomerOrderHistoryForAccount = async (input: {
+  customerAuthUserId: string;
+  customerEmail?: string;
+  branchCode?: string;
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  const normalizedAuthUserId = String(input.customerAuthUserId ?? "").trim();
+  if (!normalizedAuthUserId) {
+    throw new Error("customerAuthUserId is required");
+  }
+
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+  const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
+
+  const byAuthId = await getCustomerOrderHistoryByAuthUserId({
+    outletId: outlet.id,
+    customerAuthUserId: normalizedAuthUserId,
+    limit: safeLimit,
+  });
+
+  const byEmail = input.customerEmail
+    ? await getCustomerOrderHistoryByCustomerEmail({
+        customerEmail: input.customerEmail,
+        branchCode: input.branchCode,
+        limit: safeLimit,
+      })
+    : [];
+
+  const merged = [...byAuthId, ...byEmail].sort(
+    (a, b) => new Date(b.placedAt).getTime() - new Date(a.placedAt).getTime(),
+  );
+
+  const seen = new Set<string>();
+  return merged
+    .filter((order) => {
+      if (seen.has(order.orderNumber)) return false;
+      seen.add(order.orderNumber);
+      return true;
+    })
+    .slice(0, safeLimit);
+};
+
+export const getCustomerOrderHistoryByCustomerEmail = async (input: {
+  customerEmail: string;
+  branchCode?: string;
+  limit?: number;
+}): Promise<CustomerOrderHistoryItem[]> => {
+  const normalizedEmail = String(input.customerEmail ?? "").trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error("customerEmail is required");
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+
+  const deviceLookup = await supabase
+    .from("customer_devices")
+    .select("id")
+    .eq("email", normalizedEmail);
+
+  if (deviceLookup.error) {
+    throw new Error(deviceLookup.error.message);
+  }
+
+  const deviceIds = (deviceLookup.data ?? [])
+    .map((row) => String(row.id ?? "").trim())
+    .filter(Boolean);
+
+  return getCustomerOrderHistoryByDeviceIds({
+    outletId: outlet.id,
+    deviceIds,
+    limit: input.limit,
+  });
+};
 export const getOwnerDashboardCards = async (branchCode = DEFAULT_BRANCH) => {
   const supabase = assertSupabaseAdmin();
   const outlet = await getOutletByBranchCode(branchCode);
@@ -2535,8 +2895,10 @@ export const updateManagerMenuItem = async (input: {
   id: string;
   price?: number;
   available?: boolean;
+  branchCode?: string;
 }) => {
   const supabase = assertSupabaseAdmin();
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
   const payload: Record<string, unknown> = {};
   if (typeof input.price === "number" && Number.isFinite(input.price)) {
     payload.base_price = Math.max(0, Math.round(input.price));
@@ -2552,6 +2914,7 @@ export const updateManagerMenuItem = async (input: {
     .from("menu_items")
     .update(payload)
     .eq("id", input.id)
+    .eq("outlet_id", outlet.id)
     .select("id,name,base_price,is_available,outlet_id")
     .single<{
       id: string;
@@ -2578,12 +2941,15 @@ export const updateManagerMenuItem = async (input: {
 export const updateManagerTableAvailability = async (input: {
   tableId: string;
   availability: "available" | "unavailable";
+  branchCode?: string;
 }) => {
   const supabase = assertSupabaseAdmin();
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
   const currentResult = await supabase
     .from("restaurant_tables")
     .select("id,status")
     .eq("id", input.tableId)
+    .eq("outlet_id", outlet.id)
     .single<{ id: string; status: string }>();
   if (currentResult.error || !currentResult.data) {
     throw new Error(currentResult.error?.message ?? "Table not found");
@@ -2598,6 +2964,7 @@ export const updateManagerTableAvailability = async (input: {
     .from("restaurant_tables")
     .update({ status: input.availability })
     .eq("id", input.tableId)
+    .eq("outlet_id", outlet.id)
     .select("id,status")
     .single<{ id: string; status: string }>();
 

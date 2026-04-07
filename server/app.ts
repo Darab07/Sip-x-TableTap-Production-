@@ -15,7 +15,27 @@ export const log = (message: string, source = "express") => {
   console.log(`${formattedTime} [${source}] ${message}`);
 };
 
-const ALLOWED_ORIGINS = "*";
+const configuredOrigins = String(process.env.ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const isOriginAllowed = (origin: string) => {
+  if (!origin) return false;
+  if (configuredOrigins.includes(origin)) return true;
+
+  if (process.env.NODE_ENV !== "production") {
+    return (
+      origin.startsWith("http://localhost") ||
+      origin.startsWith("https://localhost") ||
+      origin.startsWith("http://127.0.0.1") ||
+      origin.startsWith("https://127.0.0.1") ||
+      /^https?:\/\/192\.168\.[0-9]{1,3}\.[0-9]{1,3}(:\d+)?$/.test(origin)
+    );
+  }
+
+  return false;
+};
 
 const captureApiLogs = (req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
@@ -52,7 +72,20 @@ export const createApp = (): Express => {
   const app = express();
 
   app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", ALLOWED_ORIGINS);
+    const requestOrigin = String(req.headers.origin ?? "").trim();
+    if (requestOrigin) {
+      if (!isOriginAllowed(requestOrigin)) {
+        if (req.method === "OPTIONS") {
+          res.status(403).json({ message: "Origin is not allowed" });
+          return;
+        }
+      } else {
+        res.header("Access-Control-Allow-Origin", requestOrigin);
+        res.header("Vary", "Origin");
+        res.header("Access-Control-Allow-Credentials", "true");
+      }
+    }
+
     res.header(
       "Access-Control-Allow-Methods",
       "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -61,7 +94,7 @@ export const createApp = (): Express => {
       "Access-Control-Allow-Headers",
       "Origin, X-Requested-With, Content-Type, Accept, Authorization",
     );
-    res.header("Access-Control-Allow-Credentials", "true");
+
     if (req.path.startsWith("/api")) {
       res.header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.header("Pragma", "no-cache");
@@ -81,4 +114,3 @@ export const createApp = (): Express => {
 
   return app;
 };
-

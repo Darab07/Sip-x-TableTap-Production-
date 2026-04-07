@@ -1,29 +1,79 @@
 import React from "react";
 import { useLocation } from "wouter";
 import { LoginForm } from "@/components/login-form";
+import { fetchStaffSession } from "@/lib/tabletap-supabase-api";
 import {
-  isRestaurantAuthenticated,
+  clearRestaurantAuthentication,
+  getRestaurantAuthenticatedSession,
   setRestaurantAuthenticated,
+  type RestaurantAuthenticatedSession,
 } from "@/lib/restaurant-auth";
+import { supabaseBrowser } from "@/lib/supabase";
+
+const getRoleRoute = (role: "owner" | "manager" | "admin") => {
+  if (role === "admin") return "/restaurant/admin/dashboard";
+  if (role === "manager") return "/restaurant/manager/live-orders";
+  return "/restaurant/dashboard";
+};
 
 export default function RestaurantManager() {
   const [, setLocation] = useLocation();
   const [loginError, setLoginError] = React.useState("");
 
   React.useEffect(() => {
-    if (isRestaurantAuthenticated("manager")) {
-      setLocation("/restaurant/manager/live-orders");
+    const existing = getRestaurantAuthenticatedSession();
+    if (existing?.highestRole) {
+      setLocation(getRoleRoute(existing.highestRole));
       return;
     }
 
-    if (isRestaurantAuthenticated("admin")) {
-      setLocation("/restaurant/admin/dashboard");
+    const authClient = supabaseBrowser;
+    if (!authClient) {
       return;
     }
 
-    if (isRestaurantAuthenticated("owner")) {
-      setLocation("/restaurant/dashboard");
-    }
+    let cancelled = false;
+    const bootstrap = async () => {
+      const {
+        data: { session },
+      } = await authClient.auth.getSession();
+      if (!session || cancelled) {
+        return;
+      }
+
+      try {
+        const staffSession = await fetchStaffSession();
+        if (!staffSession.highestRole) {
+          await authClient.auth.signOut();
+          clearRestaurantAuthentication();
+          if (!cancelled) {
+            setLoginError("This account is not assigned to any dashboard role.");
+          }
+          return;
+        }
+
+        const normalized: RestaurantAuthenticatedSession = {
+          user: staffSession.user,
+          highestRole: staffSession.highestRole,
+          roles: staffSession.roles,
+          outlets: staffSession.outlets,
+        };
+
+        setRestaurantAuthenticated(normalized, true);
+        if (!cancelled) {
+          setLocation(getRoleRoute(normalized.highestRole));
+        }
+      } catch {
+        await authClient.auth.signOut();
+        clearRestaurantAuthentication();
+      }
+    };
+
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+    };
   }, [setLocation]);
 
   return (
@@ -35,8 +85,16 @@ export default function RestaurantManager() {
       />
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <LoginForm
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
+            setLoginError("");
+
+            const authClient = supabaseBrowser;
+            if (!authClient) {
+              setLoginError("Supabase auth is not configured.");
+              return;
+            }
+
             const formData = new FormData(event.currentTarget);
             const email = String(formData.get("email") ?? "")
               .trim()
@@ -44,31 +102,43 @@ export default function RestaurantManager() {
             const password = String(formData.get("password") ?? "");
             const rememberMe = formData.get("rememberMe") === "on";
 
-            if (
-              email === "sipmanager@tabletap.com" &&
-              password === "xyz123abc"
-            ) {
-              setLoginError("");
-              setRestaurantAuthenticated("manager", rememberMe);
-              setLocation("/restaurant/manager/live-orders");
+            const { error } = await authClient.auth.signInWithPassword({
+              email,
+              password,
+            });
+
+            if (error) {
+              setLoginError(error.message || "Invalid email or password.");
               return;
             }
 
-            if (email === "sipowner@tabletap.com" && password === "xyz123abc") {
-              setLoginError("");
-              setRestaurantAuthenticated("owner", rememberMe);
-              setLocation("/restaurant/dashboard");
-              return;
-            }
+            try {
+              const staffSession = await fetchStaffSession();
+              if (!staffSession.highestRole) {
+                await authClient.auth.signOut();
+                clearRestaurantAuthentication();
+                setLoginError("This account is not assigned to any dashboard role.");
+                return;
+              }
 
-            if (email === "admin@tabletap.com" && password === "xyz123abc") {
-              setLoginError("");
-              setRestaurantAuthenticated("admin", rememberMe);
-              setLocation("/restaurant/admin/dashboard");
-              return;
-            }
+              const normalized: RestaurantAuthenticatedSession = {
+                user: staffSession.user,
+                highestRole: staffSession.highestRole,
+                roles: staffSession.roles,
+                outlets: staffSession.outlets,
+              };
 
-            setLoginError("Invalid email or password.");
+              setRestaurantAuthenticated(normalized, rememberMe);
+              setLocation(getRoleRoute(normalized.highestRole));
+            } catch (sessionError) {
+              await authClient.auth.signOut();
+              clearRestaurantAuthentication();
+              setLoginError(
+                sessionError instanceof Error
+                  ? sessionError.message
+                  : "Unable to verify dashboard access.",
+              );
+            }
           }}
           errorMessage={loginError}
         />
@@ -76,3 +146,4 @@ export default function RestaurantManager() {
     </div>
   );
 }
+

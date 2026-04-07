@@ -623,12 +623,18 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [promoSlideIndex, setPromoSlideIndex] = useState(0);
   const [displayName, setDisplayName] = useState(() => getDefaultDisplayName(userId));
   const [displayNameDraft, setDisplayNameDraft] = useState(() => getDefaultDisplayName(userId));
+  const [accountAuthUserId, setAccountAuthUserId] = useState("");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountEmailDraft, setAccountEmailDraft] = useState("");
+  const normalizedAccountAuthUserId = accountAuthUserId.trim();
   const normalizedAccountEmail = accountEmail.trim().toLowerCase();
   const trackerStorageScope =
-    isMenuAuthenticated && normalizedAccountEmail
-      ? `account_${normalizedAccountEmail}`
+    isMenuAuthenticated
+      ? normalizedAccountAuthUserId
+        ? `account_${normalizedAccountAuthUserId}`
+        : normalizedAccountEmail
+          ? `account_${normalizedAccountEmail}`
+          : null
       : null;
   const [accountSaveError, setAccountSaveError] = useState<string | null>(null);
   const [accountSaveLoading, setAccountSaveLoading] = useState(false);
@@ -2316,9 +2322,10 @@ useEffect(() => {
       return;
     }
 
-    const applySessionIdentity = (session: { user?: { email?: string; user_metadata?: { display_name?: string } } } | null) => {
+    const applySessionIdentity = (session: { user?: { id?: string; email?: string; user_metadata?: { display_name?: string } } } | null) => {
       const isAuthenticated = Boolean(session);
       setIsMenuAuthenticated(isAuthenticated);
+      setAccountAuthUserId(String(session?.user?.id ?? "").trim());
 
       const email = String(session?.user?.email ?? "").trim().toLowerCase();
       setAuthEmail(email);
@@ -2365,8 +2372,11 @@ useEffect(() => {
   };
 
   const loadPastOrdersFromServer = async () => {
+    const normalizedAuthUserId = accountAuthUserId.trim();
     const normalizedEmail = accountEmail.trim().toLowerCase();
-    const hasAccountIdentity = isMenuAuthenticated && Boolean(normalizedEmail);
+    const hasAccountIdentity =
+      isMenuAuthenticated &&
+      (Boolean(normalizedAuthUserId) || Boolean(normalizedEmail));
 
     if (!hasAccountIdentity) {
       return;
@@ -2375,7 +2385,8 @@ useEffect(() => {
     try {
       setPastOrdersLoading(true);
       const response = await fetchCustomerOrderHistory({
-        customerEmail: normalizedEmail,
+        authUserId: normalizedAuthUserId || undefined,
+        customerEmail: normalizedEmail || undefined,
         branchCode: "f7-islamabad",
         limit: 1000,
       });
@@ -2459,12 +2470,12 @@ useEffect(() => {
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, [accountEmail, isMenuAuthenticated]);
+  }, [accountAuthUserId, accountEmail, isMenuAuthenticated]);
 
   useEffect(() => {
     if (!showPastOrdersModal) return;
     void loadPastOrdersFromServer();
-  }, [showPastOrdersModal, accountEmail, isMenuAuthenticated]);
+  }, [showPastOrdersModal, accountAuthUserId, accountEmail, isMenuAuthenticated]);
   useEffect(() => {
     if (!pendingCartOpenAfterProfile || !isMenuAuthenticated) {
       return;
@@ -2699,6 +2710,7 @@ useEffect(() => {
     }
     await supabaseBrowser.auth.signOut();
     setIsMenuAuthenticated(false);
+    setAccountAuthUserId("");
     setShowPastOrdersModal(false);
     setShowOrderTracker(false);
     setShowCart(false);
@@ -5752,6 +5764,11 @@ useEffect(() => {
     </motion.div>
   );
 }
+
+
+
+
+
 
 
 

@@ -1,11 +1,24 @@
+import { supabaseBrowser } from "./supabase";
+
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
   "/api";
 
-const apiFetch = (input: RequestInfo | URL, init?: RequestInit) => {
+const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const headers = new Headers(init?.headers ?? undefined);
+
+  if (!headers.has("Authorization") && supabaseBrowser) {
+    const { data } = await supabaseBrowser.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+  }
+
   return fetch(input, {
     cache: "no-store",
     ...init,
+    headers,
   });
 };
 
@@ -238,15 +251,29 @@ export type CustomerOrderHistoryApiItem = {
 };
 
 export const fetchCustomerOrderHistory = async (input: {
-  deviceFingerprint: string;
+  authUserId?: string;
+  deviceFingerprint?: string;
+  customerEmail?: string;
   branchCode?: string;
   limit?: number;
 }) => {
   const params = new URLSearchParams({
-    deviceFingerprint: input.deviceFingerprint,
     branchCode: input.branchCode ?? "f7-islamabad",
     limit: String(input.limit ?? 200),
   });
+
+  if (input.authUserId) {
+    params.set("authUserId", input.authUserId.trim());
+  }
+
+  if (input.deviceFingerprint) {
+    params.set("deviceFingerprint", input.deviceFingerprint);
+  }
+
+  if (input.customerEmail) {
+    params.set("customerEmail", input.customerEmail.trim().toLowerCase());
+  }
+
   const res = await apiFetch(`${API_BASE}/orders/history?${params.toString()}`);
   return readJson<{ orders: CustomerOrderHistoryApiItem[] }>(res);
 };
@@ -293,13 +320,14 @@ export const fetchManagerLiveOrders = async (branchCode = "f7-islamabad") => {
 export const updateManagerOrderStatus = async (
   orderNumber: string,
   status: "accepted" | "preparing" | "ready",
+  branchCode = "f7-islamabad",
 ) => {
   const res = await apiFetch(
     `${API_BASE}/manager/orders/${encodeURIComponent(orderNumber)}/status`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, branchCode }),
     },
   );
   return readJson<{
@@ -432,11 +460,18 @@ export const fetchOwnerOrdersTable = async (
   }>(res);
 };
 
-export const fetchOrderStatus = async (orderNumber: string) => {
-  const cacheBust = Date.now();
-  const res = await apiFetch(
-    `${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status?ts=${cacheBust}`,
-  );
+export const fetchOrderStatus = async (
+  orderNumber: string,
+  options?: { branchCode?: string; deviceFingerprint?: string },
+) => {
+  const params = new URLSearchParams({ ts: String(Date.now()) });
+  if (options?.branchCode) {
+    params.set("branchCode", options.branchCode);
+  }
+  if (options?.deviceFingerprint) {
+    params.set("deviceFingerprint", options.deviceFingerprint);
+  }
+  const res = await apiFetch(`${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status?${params.toString()}`);
   return readJson<{
     order: {
       id: string;
@@ -532,6 +567,7 @@ export const updateManagerMenuItemApi = async (input: {
   itemId: string;
   price?: number;
   available?: boolean;
+  branchCode?: string;
 }) => {
   const res = await apiFetch(
     `${API_BASE}/manager/menu-items/${encodeURIComponent(input.itemId)}`,
@@ -541,6 +577,7 @@ export const updateManagerMenuItemApi = async (input: {
       body: JSON.stringify({
         price: input.price,
         available: input.available,
+        branchCode: input.branchCode ?? "f7-islamabad",
       }),
     },
   );
@@ -586,13 +623,14 @@ export const fetchManagerTableManagement = async (branchCode = "f7-islamabad") =
 export const updateManagerTableAvailabilityApi = async (
   tableId: string,
   availability: "available" | "unavailable",
+  branchCode = "f7-islamabad",
 ) => {
   const res = await apiFetch(
     `${API_BASE}/manager/tables/${encodeURIComponent(tableId)}/availability`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ availability }),
+      body: JSON.stringify({ availability, branchCode }),
     },
   );
   return readJson<{ table: { id: string; status: string } }>(res);
@@ -636,6 +674,27 @@ export const deleteAdminQrCodeApi = async (id: string) => {
     method: "DELETE",
   });
   return readJson<{ ok: true }>(res);
+};
+
+
+
+export const fetchStaffSession = async () => {
+  const res = await apiFetch(`${API_BASE}/auth/staff-session`);
+  return readJson<{
+    user: {
+      id: string;
+      email: string;
+      displayName: string;
+    };
+    highestRole: "manager" | "owner" | "admin" | null;
+    roles: Array<"manager" | "owner" | "admin">;
+    outlets: Array<{
+      outletId: string;
+      branchCode: string;
+      outletName: string;
+      role: "manager" | "owner" | "admin";
+    }>;
+  }>(res);
 };
 
 

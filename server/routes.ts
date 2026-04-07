@@ -5,6 +5,11 @@ import { insertUserSchema } from "../shared/schema.js";
 import { storage } from "./storage.js";
 import { HttpError } from "./errors.js";
 import {
+  getStaffAccessFromRequest,
+  requireAuthenticatedUser,
+  requireStaffRole,
+} from "./auth.js";
+import {
   getWebPushPublicKey,
   removePushSubscription,
   startOrderPushTracking,
@@ -20,7 +25,7 @@ import {
   getManagerMenuItems,
   getMenuCatalogForBranch,
   checkInTableFromQr,
-  getOrderTrackerStatus,
+  getOrderTrackerStatusForCustomer,
   getPublicTableAccess,
   getOutletOptions,
   getOwnerMenuInsights,
@@ -33,7 +38,7 @@ import {
   getOwnerSalesTrend,
   getOwnerTopSellingItems,
   placeOrderInSupabase,
-  getCustomerOrderHistoryByDevice,
+  getCustomerOrderHistoryForAccount,
   upsertCustomerDeviceProfile,
   updateManagerMenuItem,
   updateManagerTableAvailability,
@@ -80,6 +85,12 @@ const pruneWaiterCalls = (now = Date.now()) => {
 export const buildApiRouter = (): Router => {
   const router = Router();
 
+  const requireCustomerAuth = requireAuthenticatedUser();
+  const requireStaffAccess = requireStaffRole("manager", { skipBranchCheck: true });
+  const requireManagerAccess = requireStaffRole("manager");
+  const requireOwnerAccess = requireStaffRole("owner");
+  const requireAdminAccess = requireStaffRole("admin", { skipBranchCheck: true });
+
   router.use((_req, res, next) => {
     res.setHeader("Cache-Control", "no-store, max-age=0");
     res.setHeader("Pragma", "no-cache");
@@ -95,7 +106,26 @@ export const buildApiRouter = (): Router => {
   });
 
   router.get(
+    "/auth/staff-session",
+    requireStaffAccess,
+    asyncHandler(async (req, res) => {
+      const staff = getStaffAccessFromRequest(req);
+      if (!staff) {
+        throw new HttpError(401, "Not authenticated");
+      }
+
+      res.json({
+        user: staff.user,
+        highestRole: staff.highestRole,
+        roles: staff.roles,
+        outlets: staff.outlets,
+      });
+    }),
+  );
+
+  router.get(
     "/outlets",
+    requireStaffAccess,
     asyncHandler(async (_req, res) => {
       const outlets = await getOutletOptions();
       res.json({ outlets });
@@ -193,6 +223,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/manager/waiter-calls",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -214,11 +245,39 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/orders/place",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
       let order;
       try {
-        order = await placeOrderInSupabase(req.body);
+        const authenticatedUser = req.authenticatedUser;
+        if (!authenticatedUser) {
+          throw new HttpError(401, "You must be logged in to place an order");
+        }
+
+        const rawBody = (req.body ?? {}) as Record<string, unknown>;
+        const incomingName =
+          typeof rawBody.customerName === "string"
+            ? rawBody.customerName.trim()
+            : "";
+        const deviceFingerprint =
+          typeof rawBody.deviceFingerprint === "string"
+            ? rawBody.deviceFingerprint.trim()
+            : "";
+
+        if (!deviceFingerprint) {
+          throw new HttpError(400, "deviceFingerprint is required to place an order");
+        }
+
+        order = await placeOrderInSupabase({
+          ...rawBody,
+          customerEmail: authenticatedUser.email,
+          customerName: incomingName || authenticatedUser.displayName,
+          customerAuthUserId: authenticatedUser.id,
+        } as Parameters<typeof placeOrderInSupabase>[0]);
       } catch (error) {
+        if (error instanceof HttpError) {
+          throw error;
+        }
         const message =
           error instanceof Error ? error.message : "Unable to place order";
         throw new HttpError(400, message);
@@ -229,44 +288,59 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/orders/history",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
-      const deviceFingerprint =
-        typeof req.query.deviceFingerprint === "string"
-          ? req.query.deviceFingerprint.trim()
-          : "";
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.email) {
+        throw new HttpError(401, "You must be logged in to view order history");
+      }
+
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
           : "f7-islamabad";
       const limitRaw =
         typeof req.query.limit === "string" ? Number(req.query.limit) : 200;
-      if (!deviceFingerprint) {
-        throw new HttpError(400, "deviceFingerprint is required");
-      }
-      const orders = await getCustomerOrderHistoryByDevice({
-        deviceFingerprint,
+      const safeLimit = Number.isFinite(limitRaw) ? limitRaw : 200;
+
+      const orders = await getCustomerOrderHistoryForAccount({
+        customerAuthUserId: authenticatedUser.id,
+        customerEmail: authenticatedUser.email,
         branchCode,
-        limit: Number.isFinite(limitRaw) ? limitRaw : 200,
+        limit: safeLimit,
       });
+
       res.json({ orders });
     }),
   );
 
   router.post(
     "/customers/profile",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.email) {
+        throw new HttpError(401, "You must be logged in to update your profile");
+      }
+
       const { deviceFingerprint, name, email } = req.body as {
         deviceFingerprint?: string;
         name?: string;
         email?: string;
       };
-      if (!deviceFingerprint || !name || !email) {
-        throw new HttpError(400, "deviceFingerprint, name and email are required");
+      if (!deviceFingerprint || !name) {
+        throw new HttpError(400, "deviceFingerprint and name are required");
       }
+
+      const normalizedEmail = String(email ?? "").trim().toLowerCase();
+      if (normalizedEmail && normalizedEmail !== authenticatedUser.email) {
+        throw new HttpError(403, "Profile email must match your authenticated account");
+      }
+
       const profile = await upsertCustomerDeviceProfile({
         deviceFingerprint,
         name,
-        email,
+        email: authenticatedUser.email,
       });
       res.json({ profile });
     }),
@@ -274,6 +348,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/manager/live-orders",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -286,6 +361,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/manager/menu-items",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -298,6 +374,7 @@ export const buildApiRouter = (): Router => {
 
   router.patch(
     "/manager/menu-items/:itemId",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const { itemId } = req.params;
       const { price, available } = req.body as {
@@ -307,13 +384,16 @@ export const buildApiRouter = (): Router => {
       if (!itemId) {
         throw new HttpError(400, "itemId is required");
       }
-      const item = await updateManagerMenuItem({ id: itemId, price, available });
+      const branchCode =
+        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+      const item = await updateManagerMenuItem({ id: itemId, price, available, branchCode });
       res.json({ item });
     }),
   );
 
   router.get(
     "/manager/table-management",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -326,6 +406,7 @@ export const buildApiRouter = (): Router => {
 
   router.patch(
     "/manager/tables/:tableId/availability",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const { tableId } = req.params;
       const { availability } = req.body as {
@@ -334,13 +415,16 @@ export const buildApiRouter = (): Router => {
       if (!tableId || !availability) {
         throw new HttpError(400, "tableId and availability are required");
       }
-      const table = await updateManagerTableAvailability({ tableId, availability });
+      const branchCode =
+        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+      const table = await updateManagerTableAvailability({ tableId, availability, branchCode });
       res.json({ table });
     }),
   );
 
   router.patch(
     "/manager/orders/:orderNumber/status",
+    requireManagerAccess,
     asyncHandler(async (req, res) => {
       const { orderNumber } = req.params;
       const { status } = req.body as {
@@ -349,25 +433,50 @@ export const buildApiRouter = (): Router => {
       if (!orderNumber || !status) {
         throw new HttpError(400, "orderNumber and status are required");
       }
-      const updated = await updateOrderStatusFromManager({ orderNumber, status });
+      const branchCode =
+        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+      const updated = await updateOrderStatusFromManager({ orderNumber, status, branchCode });
       res.json({ order: updated });
     }),
   );
 
   router.get(
     "/orders/:orderNumber/status",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
       const { orderNumber } = req.params;
       if (!orderNumber) {
         throw new HttpError(400, "orderNumber is required");
       }
-      const order = await getOrderTrackerStatus(orderNumber);
+
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.email) {
+        throw new HttpError(401, "You must be logged in to track this order");
+      }
+
+      const deviceFingerprint =
+        typeof req.query.deviceFingerprint === "string"
+          ? req.query.deviceFingerprint.trim()
+          : undefined;
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : "f7-islamabad";
+
+      const order = await getOrderTrackerStatusForCustomer({
+        orderNumber,
+        customerAuthUserId: authenticatedUser.id,
+        customerEmail: authenticatedUser.email,
+        deviceFingerprint,
+        branchCode,
+      });
       res.json({ order });
     }),
   );
 
   router.get(
     "/admin/qr-codes",
+    requireAdminAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -380,6 +489,7 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/admin/qr-codes",
+    requireAdminAccess,
     asyncHandler(async (req, res) => {
       const { tableNumber, branchCode } = req.body as {
         tableNumber?: number;
@@ -399,6 +509,7 @@ export const buildApiRouter = (): Router => {
 
   router.delete(
     "/admin/qr-codes/:id",
+    requireAdminAccess,
     asyncHandler(async (req, res) => {
       const { id } = req.params;
       if (!id) {
@@ -411,6 +522,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/admin/earnings",
+    requireAdminAccess,
     asyncHandler(async (_req, res) => {
       const payload = await getAdminEarnings();
       res.json(payload);
@@ -419,6 +531,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/cards",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -431,6 +544,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/sales-trend",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -444,6 +558,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/top-items",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -457,6 +572,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/table-management",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -469,6 +585,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/menu-insights",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -487,6 +604,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/orders/summary",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -499,6 +617,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/orders/trend",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
@@ -518,6 +637,7 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/dashboard/owner/orders/table",
+    requireOwnerAccess,
     asyncHandler(async (req, res) => {
       const branchCode =
         typeof req.query.branchCode === "string"
