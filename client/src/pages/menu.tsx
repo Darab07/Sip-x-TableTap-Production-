@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ClipboardList,
   LifeBuoy,
-  Pencil,
   Plus,
   Minus,
   X,
@@ -15,6 +14,7 @@ import {
   MapPin,
   Menu as MenuIcon,
   Star,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -35,7 +35,6 @@ import {
   fetchOrderStatus,
   fetchMenuCatalog,
   fetchTablePublicAccess,
-  upsertCustomerProfile,
   type MenuCatalogApiResponse,
 } from "@/lib/tabletap-supabase-api";
 import { supabaseBrowser } from "@/lib/supabase";
@@ -55,9 +54,6 @@ const RESTAURANT = {
   hours: "8 AM - 1 AM",
 };
 
-const DISPLAY_NAME_KEY = "tabletap_display_name";
-const ACCOUNT_EMAIL_KEY = "tabletap_account_email";
-const MENU_AUTH_KEY = "tabletap_menu_authenticated";
 const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
 
 const getDefaultDisplayName = (id: string) => {
@@ -474,8 +470,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return match ? match[1] : "";
   };
 
-    const getStoredOrderForCurrentTable = () => {
-    const savedOrder = localStorage.getItem(`lastOrder_${userId}`);
+  const getStoredOrderForCurrentTable = (storageScope: string) => {
+    const savedOrder = localStorage.getItem(`lastOrder_${storageScope}`);
     if (!savedOrder) return null;
     try {
       const parsed = JSON.parse(savedOrder) as StoredOrder;
@@ -483,7 +479,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         (parsed as { status?: unknown }).status,
       );
       if (normalizedStatus === "served") {
-        localStorage.removeItem(`lastOrder_${userId}`);
+        localStorage.removeItem(`lastOrder_${storageScope}`);
         return null;
       }
       const savedTableNumber = getTableNumberFromLabel(parsed.tableLabel);
@@ -498,12 +494,41 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           new Date(parsed.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
       };
       if (!isOrderWithinTrackWindow(normalizedOrder)) {
-        localStorage.removeItem(`lastOrder_${userId}`);
+        localStorage.removeItem(`lastOrder_${storageScope}`);
         return null;
       }
       return normalizedOrder;
     } catch {
       return null;
+    }
+  };
+
+  const getTrackedOrdersForScope = (
+    storageScope: string,
+    fallbackOrder: StoredOrder | null,
+  ) => {
+    const raw = localStorage.getItem(`tracked_orders_${storageScope}`);
+    if (!raw) return fallbackOrder ? [fallbackOrder] : [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return fallbackOrder ? [fallbackOrder] : [];
+      const normalized = parsed
+        .map((entry) => ({
+          ...(entry as StoredOrder),
+          status: normalizeTrackedStatus((entry as { status?: unknown }).status),
+          placedAt:
+            (entry as StoredOrder).placedAt ||
+            new Date((entry as StoredOrder).statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
+        }))
+        .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
+        .filter((entry) => isOrderWithinTrackWindow(entry));
+
+      if (normalized.length === 0 && fallbackOrder) {
+        return [fallbackOrder];
+      }
+      return normalized;
+    } catch {
+      return fallbackOrder ? [fallbackOrder] : [];
     }
   };
   
@@ -560,37 +585,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [collaborativeUserId, setCollaborativeUserId] = useState<string | null>(null);
   const [isSessionLocked, setIsSessionLocked] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastOrder, setLastOrder] = useState<StoredOrder | null>(() => getStoredOrderForCurrentTable());
-  const [showOrderTracker, setShowOrderTracker] = useState(() => {
-    return Boolean(getStoredOrderForCurrentTable());
-  });
-  const [trackedOrders, setTrackedOrders] = useState<StoredOrder[]>(() => {
-    if (typeof window === "undefined") return [];
-    const fallbackOrder = getStoredOrderForCurrentTable();
-    try {
-      const raw = localStorage.getItem(`tracked_orders_${userId}`);
-      if (!raw) return fallbackOrder ? [fallbackOrder] : [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return fallbackOrder ? [fallbackOrder] : [];
-      const normalized = parsed
-        .map((entry) => ({
-          ...(entry as StoredOrder),
-          status: normalizeTrackedStatus((entry as { status?: unknown }).status),
-          placedAt:
-            (entry as StoredOrder).placedAt ||
-            new Date((entry as StoredOrder).statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
-        }))
-        .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
-        .filter((entry) => isOrderWithinTrackWindow(entry));
-
-      if (normalized.length === 0 && fallbackOrder) {
-        return [fallbackOrder];
-      }
-      return normalized;
-    } catch {
-      return fallbackOrder ? [fallbackOrder] : [];
-    }
-  });
+    const [lastOrder, setLastOrder] = useState<StoredOrder | null>(null);
+  const [showOrderTracker, setShowOrderTracker] = useState(false);
+  const [trackedOrders, setTrackedOrders] = useState<StoredOrder[]>([]);
   const [trackerPageIndex, setTrackerPageIndex] = useState(0);
   const [showAuthDrawer, setShowAuthDrawer] = useState(false);
   const [showAccountDrawer, setShowAccountDrawer] = useState(false);
@@ -600,14 +597,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [authOtp, setAuthOtp] = useState("");
   const [authStep, setAuthStep] = useState<"credentials" | "verify-signup">("credentials");
   const [authLoading, setAuthLoading] = useState(false);
+  const [authResendLoading, setAuthResendLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [isPasswordRecoveryMode, setIsPasswordRecoveryMode] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
-  const [isMenuAuthenticated, setIsMenuAuthenticated] = useState(
-    () => localStorage.getItem(MENU_AUTH_KEY) === "true",
-  );
+  const [isMenuAuthenticated, setIsMenuAuthenticated] = useState(false);
   const [showPastOrdersModal, setShowPastOrdersModal] = useState(false);
   const [pastOrders, setPastOrders] = useState<StoredOrder[]>([]);
   const [pastOrdersLoading, setPastOrdersLoading] = useState(false);
@@ -625,21 +621,22 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     return shouldShow;
   });
   const [promoSlideIndex, setPromoSlideIndex] = useState(0);
-  const [displayName, setDisplayName] = useState(() => {
-    const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
-    return storedName?.trim() || getDefaultDisplayName(userId);
-  });
-  const [displayNameDraft, setDisplayNameDraft] = useState(() => {
-    const storedName = localStorage.getItem(DISPLAY_NAME_KEY);
-    return storedName?.trim() || getDefaultDisplayName(userId);
-  });
-  const [accountEmail, setAccountEmail] = useState(() => {
-    return localStorage.getItem(ACCOUNT_EMAIL_KEY)?.trim().toLowerCase() || "";
-  });
-  const [accountEmailDraft, setAccountEmailDraft] = useState(() => {
-    return localStorage.getItem(ACCOUNT_EMAIL_KEY)?.trim().toLowerCase() || "";
-  });
+  const [displayName, setDisplayName] = useState(() => getDefaultDisplayName(userId));
+  const [displayNameDraft, setDisplayNameDraft] = useState(() => getDefaultDisplayName(userId));
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountEmailDraft, setAccountEmailDraft] = useState("");
+  const normalizedAccountEmail = accountEmail.trim().toLowerCase();
+  const trackerStorageScope =
+    isMenuAuthenticated && normalizedAccountEmail
+      ? `account_${normalizedAccountEmail}`
+      : null;
   const [accountSaveError, setAccountSaveError] = useState<string | null>(null);
+  const [accountSaveLoading, setAccountSaveLoading] = useState(false);
+  const [accountSaveMessage, setAccountSaveMessage] = useState<string | null>(null);
+  const [pendingEmailChange, setPendingEmailChange] = useState<string | null>(null);
+  const [emailChangeOtp, setEmailChangeOtp] = useState("");
+  const [emailChangeVerifying, setEmailChangeVerifying] = useState(false);
+  const [emailChangeResending, setEmailChangeResending] = useState(false);
   const [pendingCartOpenAfterProfile, setPendingCartOpenAfterProfile] = useState(false);
   const [remoteCatalog, setRemoteCatalog] =
     useState<MenuCatalogApiResponse | null>(null);
@@ -688,8 +685,33 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    localStorage.setItem(`tracked_orders_${userId}`, JSON.stringify(trackedOrders.slice(0, 30)));
-  }, [trackedOrders]);
+    if (!trackerStorageScope) {
+      setLastOrder(null);
+      setTrackedOrders([]);
+      setShowOrderTracker(false);
+      setTrackerPageIndex(0);
+      return;
+    }
+    const storedOrder = getStoredOrderForCurrentTable(trackerStorageScope);
+    const storedTrackedOrders = getTrackedOrdersForScope(
+      trackerStorageScope,
+      storedOrder,
+    ).slice(0, 30);
+    setLastOrder(storedOrder);
+    setShowOrderTracker(Boolean(storedOrder));
+    setTrackedOrders(storedTrackedOrders);
+    setTrackerPageIndex(0);
+  }, [tableNumber, trackerStorageScope]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !trackerStorageScope) return;
+    const trackedOrdersKey = getTrackedOrdersKey();
+    if (!trackedOrdersKey) return;
+    localStorage.setItem(
+      trackedOrdersKey,
+      JSON.stringify(trackedOrders.slice(0, 30)),
+    );
+  }, [trackedOrders, trackerStorageScope]);
 
   useEffect(() => {
     if (trackerPageIndex < trackableOrders.length) return;
@@ -972,19 +994,26 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   };
 
   const ensureCartAuth = () => {
-    return true;
+    if (isMenuAuthenticated) {
+      return true;
+    }
+    setPendingCartOpenAfterProfile(true);
+    openAuthDrawer("login");
+    setAuthError("Please log in or sign up to continue.");
+    return false;
   };
 
   const isProfileCompleteForCart = () => {
+    if (!isMenuAuthenticated) {
+      return false;
+    }
     const normalizedName = displayName.trim();
     const normalizedEmail = accountEmail.trim().toLowerCase();
-    const defaultName = getDefaultDisplayName(userId).trim().toLowerCase();
-    const hasCustomName =
-      normalizedName.length > 0 && normalizedName.toLowerCase() !== defaultName;
+    const hasName = normalizedName.length > 0;
     const hasValidEmail =
       normalizedEmail.length > 0 &&
       /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
-    return hasCustomName && hasValidEmail;
+    return hasName && hasValidEmail;
   };
 
   const showCustomerWaiterBanner = () => {
@@ -1088,11 +1117,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         .slice(0, 30);
     });
 
+    const storedOrderKey = getStoredOrderKey();
     if (updatedOrder.status === "served") {
-      localStorage.removeItem(getStoredOrderKey());
+      if (storedOrderKey) {
+        localStorage.removeItem(storedOrderKey);
+      }
       setShowOrderTracker(false);
-    } else {
-      localStorage.setItem(getStoredOrderKey(), JSON.stringify(updatedOrder));
+    } else if (storedOrderKey) {
+      localStorage.setItem(storedOrderKey, JSON.stringify(updatedOrder));
     }
 
     if (isCompletedPastOrderStatus(updatedOrder.status)) {
@@ -1126,7 +1158,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     localStorage.removeItem(getCartKey());
     localStorage.removeItem(getTipKey());
     localStorage.removeItem(getOrderNotesKey());
-    localStorage.removeItem(getStoredOrderKey());
+    const storedOrderKey = getStoredOrderKey();
+    if (storedOrderKey) {
+      localStorage.removeItem(storedOrderKey);
+    }
     sessionStorage.removeItem("tempUserId");
     window.location.href = "/menu";
   };
@@ -1247,7 +1282,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const getCartKey = () => `cart_${userId}`;
   const getTipKey = () => `selectedTip_${userId}`;
   const getOrderNotesKey = () => `orderNotes_${userId}`;
-  const getStoredOrderKey = () => `lastOrder_${userId}`;
+  const getStoredOrderKey = () =>
+    trackerStorageScope ? `lastOrder_${trackerStorageScope}` : "";
+  const getTrackedOrdersKey = () =>
+    trackerStorageScope ? `tracked_orders_${trackerStorageScope}` : "";
   const getCartItemKey = (itemName: string) => `${itemName}_${userId}`;
   
   // Wrapper function to convert item name to proper item key for removal
@@ -2264,71 +2302,46 @@ useEffect(() => {
   useEffect(() => {
     if (!showAccountDrawer) return;
     setDisplayNameDraft(displayName);
-    setAccountEmailDraft(accountEmail);
+    if (!pendingEmailChange) {
+      setAccountEmailDraft(accountEmail);
+    }
     setAccountSaveError(null);
-  }, [showAccountDrawer, displayName, accountEmail]);
+    if (!pendingEmailChange) {
+      setAccountSaveMessage(null);
+    }
+  }, [showAccountDrawer, displayName, accountEmail, pendingEmailChange]);
 
   useEffect(() => {
     if (!supabaseBrowser) {
       return;
     }
 
+    const applySessionIdentity = (session: { user?: { email?: string; user_metadata?: { display_name?: string } } } | null) => {
+      const isAuthenticated = Boolean(session);
+      setIsMenuAuthenticated(isAuthenticated);
+
+      const email = String(session?.user?.email ?? "").trim().toLowerCase();
+      setAuthEmail(email);
+      setAccountEmail(email);
+      setAccountEmailDraft(email);
+
+      const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
+      const fallbackName = email ? email.split("@")[0]?.trim() || getDefaultDisplayName(userId) : getDefaultDisplayName(userId);
+      const resolvedName = nameFromProfile || fallbackName;
+      setDisplayName(resolvedName);
+      setDisplayNameDraft(resolvedName);
+    };
+
     let mounted = true;
     supabaseBrowser.auth.getSession().then(({ data }) => {
       if (!mounted) {
         return;
       }
-      const session = data.session;
-      const isAuthenticated = Boolean(session);
-      setIsMenuAuthenticated(isAuthenticated);
-      if (isAuthenticated) {
-        localStorage.setItem(MENU_AUTH_KEY, "true");
-      } else {
-        localStorage.removeItem(MENU_AUTH_KEY);
-      }
-      const email = session?.user?.email ?? "";
-      if (email) {
-        setAuthEmail(email);
-        if (!localStorage.getItem(ACCOUNT_EMAIL_KEY)) {
-          const normalized = email.trim().toLowerCase();
-          setAccountEmail(normalized);
-          setAccountEmailDraft(normalized);
-          localStorage.setItem(ACCOUNT_EMAIL_KEY, normalized);
-        }
-      }
-      const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
-      if (nameFromProfile) {
-        setDisplayName(nameFromProfile);
-        setDisplayNameDraft(nameFromProfile);
-        localStorage.setItem(DISPLAY_NAME_KEY, nameFromProfile);
-      }
+      applySessionIdentity(data.session);
     });
 
     const { data } = supabaseBrowser.auth.onAuthStateChange((event, session) => {
-      const isAuthenticated = Boolean(session);
-      setIsMenuAuthenticated(isAuthenticated);
-      if (isAuthenticated) {
-        localStorage.setItem(MENU_AUTH_KEY, "true");
-      } else {
-        localStorage.removeItem(MENU_AUTH_KEY);
-      }
-
-      const email = session?.user?.email ?? "";
-      if (email) {
-        setAuthEmail(email);
-        if (!localStorage.getItem(ACCOUNT_EMAIL_KEY)) {
-          const normalized = email.trim().toLowerCase();
-          setAccountEmail(normalized);
-          setAccountEmailDraft(normalized);
-          localStorage.setItem(ACCOUNT_EMAIL_KEY, normalized);
-        }
-      }
-      const nameFromProfile = String(session?.user?.user_metadata?.display_name ?? "").trim();
-      if (nameFromProfile) {
-        setDisplayName(nameFromProfile);
-        setDisplayNameDraft(nameFromProfile);
-        localStorage.setItem(DISPLAY_NAME_KEY, nameFromProfile);
-      }
+      applySessionIdentity(session);
 
       if (event === "PASSWORD_RECOVERY") {
         setIsPasswordRecoveryMode(true);
@@ -2349,14 +2362,20 @@ useEffect(() => {
     const finalName = normalizedName || getDefaultDisplayName(userId);
     setDisplayName(finalName);
     setDisplayNameDraft(finalName);
-    localStorage.setItem(DISPLAY_NAME_KEY, finalName);
   };
 
   const loadPastOrdersFromServer = async () => {
+    const normalizedEmail = accountEmail.trim().toLowerCase();
+    const hasAccountIdentity = isMenuAuthenticated && Boolean(normalizedEmail);
+
+    if (!hasAccountIdentity) {
+      return;
+    }
+
     try {
       setPastOrdersLoading(true);
       const response = await fetchCustomerOrderHistory({
-        deviceFingerprint,
+        customerEmail: normalizedEmail,
         branchCode: "f7-islamabad",
         limit: 1000,
       });
@@ -2391,7 +2410,6 @@ useEffect(() => {
             })),
           };
         })
-        .filter((order) => isCompletedPastOrderStatus(order.status))
         .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
 
       const deduped: StoredOrder[] = [];
@@ -2402,7 +2420,32 @@ useEffect(() => {
         deduped.push(order);
       }
 
-      setPastOrders(deduped);
+      setPastOrders(
+        deduped.filter((order) => isCompletedPastOrderStatus(order.status)),
+      );
+
+      const activeServerOrders = deduped
+        .filter((order) => !isCompletedPastOrderStatus(order.status))
+        .filter((order) => normalizeTrackedStatus(order.status) !== "served")
+        .filter((order) => isOrderWithinTrackWindow(order));
+
+      setTrackedOrders((current) => {
+        const merged = [...activeServerOrders, ...current]
+          .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
+
+        const unique: StoredOrder[] = [];
+        const uniqueOrderNumbers = new Set<string>();
+        for (const order of merged) {
+          if (uniqueOrderNumbers.has(order.orderNumber)) continue;
+          uniqueOrderNumbers.add(order.orderNumber);
+          unique.push(order);
+        }
+
+        return unique
+          .filter((order) => normalizeTrackedStatus(order.status) !== "served")
+          .filter((order) => isOrderWithinTrackWindow(order))
+          .slice(0, 30);
+      });
     } catch (error) {
       console.warn("Past orders sync failed:", error);
     } finally {
@@ -2416,18 +2459,45 @@ useEffect(() => {
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [accountEmail, isMenuAuthenticated]);
 
   useEffect(() => {
     if (!showPastOrdersModal) return;
     void loadPastOrdersFromServer();
-  }, [showPastOrdersModal]);
+  }, [showPastOrdersModal, accountEmail, isMenuAuthenticated]);
+  useEffect(() => {
+    if (!pendingCartOpenAfterProfile || !isMenuAuthenticated) {
+      return;
+    }
+
+    if (isProfileCompleteForCart()) {
+      setPendingCartOpenAfterProfile(false);
+      setShowCart(true);
+      return;
+    }
+
+    if (!showAccountDrawer) {
+      openAccountDrawer({
+        errorMessage: "Please complete your account profile before viewing cart.",
+        keepPendingCartOpen: true,
+      });
+    }
+  }, [
+    accountEmail,
+    displayName,
+    isMenuAuthenticated,
+    pendingCartOpenAfterProfile,
+    showAccountDrawer,
+  ]);
   const openAccountDrawer = (
     options?: { errorMessage?: string | null; keepPendingCartOpen?: boolean },
   ) => {
     setDisplayNameDraft(displayName);
-    setAccountEmailDraft(accountEmail);
+    if (!pendingEmailChange) {
+      setAccountEmailDraft(accountEmail);
+    }
     setAccountSaveError(options?.errorMessage ?? null);
+    setAccountSaveMessage(null);
     if (!options?.keepPendingCartOpen) {
       setPendingCartOpenAfterProfile(false);
     }
@@ -2437,10 +2507,15 @@ useEffect(() => {
   const closeAccountDrawer = () => {
     setShowAccountDrawer(false);
     setPendingCartOpenAfterProfile(false);
+    setAccountSaveMessage(null);
+    setAccountSaveError(null);
+    setPendingEmailChange(null);
+    setEmailChangeOtp("");
   };
 
   const openCartWithProfileGuard = () => {
     if (!ensureOrderingEnabled()) return;
+    if (!ensureCartAuth()) return;
 
     if (isProfileCompleteForCart()) {
       setShowCart(true);
@@ -2449,12 +2524,19 @@ useEffect(() => {
 
     setPendingCartOpenAfterProfile(true);
     openAccountDrawer({
-      errorMessage: "Please add your name and email before viewing cart.",
+      errorMessage: "Please complete your account profile before viewing cart.",
       keepPendingCartOpen: true,
     });
   };
 
   const handleSaveAccountProfile = async () => {
+    if (!supabaseBrowser || !isMenuAuthenticated) {
+      setAccountSaveError("Please log in first.");
+      setShowAccountDrawer(false);
+      openAuthDrawer("login");
+      return;
+    }
+
     const normalizedName = displayNameDraft.trim().slice(0, 32);
     const normalizedEmail = accountEmailDraft.trim().toLowerCase();
 
@@ -2472,23 +2554,54 @@ useEffect(() => {
     }
 
     setAccountSaveError(null);
-    setDisplayName(normalizedName);
-    setDisplayNameDraft(normalizedName);
-    setAccountEmail(normalizedEmail);
-    setAccountEmailDraft(normalizedEmail);
-    localStorage.setItem(DISPLAY_NAME_KEY, normalizedName);
-    localStorage.setItem(ACCOUNT_EMAIL_KEY, normalizedEmail);
+    setAccountSaveMessage(null);
+    setAccountSaveLoading(true);
 
     try {
-      const response = await upsertCustomerProfile({
-        deviceFingerprint,
-        name: normalizedName,
-        email: normalizedEmail,
-      });
-      if (!response.profile.savedToDatabase && response.profile.warning) {
-        setAccountSaveError(response.profile.warning);
+      const {
+        data: { user },
+        error: userError,
+      } = await supabaseBrowser.auth.getUser();
+      if (userError || !user) {
+        throw new Error(userError?.message || "No authenticated user found.");
+      }
+
+      const currentEmail = String(user.email ?? "").trim().toLowerCase();
+      const currentName = String(user.user_metadata?.display_name ?? "").trim();
+
+      if (normalizedName !== currentName) {
+        const { error } = await supabaseBrowser.auth.updateUser({
+          data: {
+            ...(user.user_metadata ?? {}),
+            display_name: normalizedName,
+          },
+        });
+        if (error) {
+          throw new Error(error.message);
+        }
+      }
+
+      setDisplayName(normalizedName);
+      setDisplayNameDraft(normalizedName);
+
+      if (normalizedEmail !== currentEmail) {
+        const { error } = await supabaseBrowser.auth.updateUser({
+          email: normalizedEmail,
+        });
+        if (error) {
+          throw new Error(normalizeEmailInUseMessage(error.message));
+        }
+
+        setPendingEmailChange(normalizedEmail);
+        setEmailChangeOtp("");
+        setAccountSaveMessage(
+          "We sent an OTP to your new email. Enter it below to confirm email change.",
+        );
         return;
       }
+
+      setAccountEmail(normalizedEmail);
+      setAccountEmailDraft(normalizedEmail);
       setShowAccountDrawer(false);
       if (pendingCartOpenAfterProfile) {
         setPendingCartOpenAfterProfile(false);
@@ -2498,9 +2611,105 @@ useEffect(() => {
       setAccountSaveError(
         error instanceof Error
           ? error.message
-          : "Could not save account details to database. Please try again.",
+          : "Could not save account details to your profile. Please try again.",
       );
+    } finally {
+      setAccountSaveLoading(false);
     }
+  };
+
+  const handleVerifyPendingEmailChange = async () => {
+    if (!supabaseBrowser || !pendingEmailChange) {
+      return;
+    }
+    const token = emailChangeOtp.trim();
+    if (!token) {
+      setAccountSaveError("Enter the OTP sent to your new email.");
+      return;
+    }
+
+    setEmailChangeVerifying(true);
+    setAccountSaveError(null);
+    setAccountSaveMessage(null);
+    try {
+      const { error } = await supabaseBrowser.auth.verifyOtp({
+        type: "email_change",
+        email: pendingEmailChange,
+        token,
+      });
+      if (error) {
+        setAccountSaveError(error.message);
+        return;
+      }
+
+      setAccountEmail(pendingEmailChange);
+      setAccountEmailDraft(pendingEmailChange);
+      setPendingEmailChange(null);
+      setEmailChangeOtp("");
+      setShowAccountDrawer(false);
+      if (pendingCartOpenAfterProfile) {
+        setPendingCartOpenAfterProfile(false);
+        setShowCart(true);
+      }
+    } catch (error) {
+      setAccountSaveError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not verify email change OTP. Please try again.",
+        ),
+      );
+    } finally {
+      setEmailChangeVerifying(false);
+    }
+  };
+
+  const handleResendPendingEmailChangeOtp = async () => {
+    if (!supabaseBrowser || !pendingEmailChange) {
+      return;
+    }
+
+    setEmailChangeResending(true);
+    setAccountSaveError(null);
+    setAccountSaveMessage(null);
+    try {
+      const { error } = await supabaseBrowser.auth.resend({
+        type: "email_change",
+        email: pendingEmailChange,
+      });
+      if (error) {
+        setAccountSaveError(error.message);
+        return;
+      }
+      setAccountSaveMessage("A new OTP has been sent to your new email.");
+    } catch (error) {
+      setAccountSaveError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not resend email OTP right now. Please try again.",
+        ),
+      );
+    } finally {
+      setEmailChangeResending(false);
+    }
+  };
+
+  const handleMenuSignOut = async () => {
+    if (!supabaseBrowser) {
+      return;
+    }
+    await supabaseBrowser.auth.signOut();
+    setIsMenuAuthenticated(false);
+    setShowPastOrdersModal(false);
+    setShowOrderTracker(false);
+    setShowCart(false);
+    setShowAuthDrawer(false);
+    setShowAccountDrawer(false);
+    setPendingEmailChange(null);
+    setEmailChangeOtp("");
+    setAuthPassword("");
+    setAuthOtp("");
+    setAuthError(null);
+    setAuthMessage(null);
   };
 
   // Listen for order placed events from checkout
@@ -2531,7 +2740,10 @@ useEffect(() => {
       });
       setTrackerPageIndex(0);
       setShowOrderTracker(true);
-      localStorage.setItem(getStoredOrderKey(), JSON.stringify(normalizedOrder));
+      const storedOrderKey = getStoredOrderKey();
+      if (storedOrderKey) {
+        localStorage.setItem(storedOrderKey, JSON.stringify(normalizedOrder));
+      }
 
       // Show initial order placed notification
       setNotification({
@@ -2952,6 +3164,20 @@ useEffect(() => {
     setConfirmNewPassword("");
   };
 
+  const normalizeEmailInUseMessage = (message: string) => {
+    const normalized = message.trim().toLowerCase();
+    const looksTaken =
+      normalized.includes("already") &&
+      (normalized.includes("registered") ||
+        normalized.includes("exists") ||
+        normalized.includes("in use") ||
+        normalized.includes("taken"));
+
+    return looksTaken
+      ? "This email already has an account. Please log in instead."
+      : message;
+  };
+
   const normalizeAuthErrorMessage = (
     error: unknown,
     fallback = "Authentication request failed. Please try again.",
@@ -2982,6 +3208,9 @@ useEffect(() => {
     }
     return fallback;
   };
+
+  const getMenuAuthRedirectUrl = () =>
+    `${window.location.origin}/sip/menu`;
 
   const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3038,7 +3267,6 @@ useEffect(() => {
         }
         saveDisplayName();
         setIsMenuAuthenticated(true);
-        localStorage.setItem(MENU_AUTH_KEY, "true");
         closeAuthDrawer();
         return;
       }
@@ -3052,23 +3280,33 @@ useEffect(() => {
             data: {
               display_name: nameValue || `User ${userId}`,
             },
-            emailRedirectTo: `${window.location.origin}/menu`,
+            emailRedirectTo: getMenuAuthRedirectUrl(),
           },
         });
         if (error) {
-          setAuthError(error.message);
+          const friendlyMessage = normalizeEmailInUseMessage(error.message);
+          setAuthError(friendlyMessage);
+          if (friendlyMessage === "This email already has an account. Please log in instead.") {
+            setAuthMode("login");
+            setAuthStep("credentials");
+          }
+          return;
+        }
+        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+          setAuthError("This email already has an account. Please log in instead.");
+          setAuthMode("login");
+          setAuthStep("credentials");
           return;
         }
         if (data.session) {
           saveDisplayName();
           setIsMenuAuthenticated(true);
-          localStorage.setItem(MENU_AUTH_KEY, "true");
           closeAuthDrawer();
           return;
         }
         setAuthStep("verify-signup");
         setAuthMessage(
-          "A verification code/email has been sent. Enter OTP below, or use the email link."
+          "A verification OTP has been sent to your email. Enter it below."
         );
         return;
       }
@@ -3078,12 +3316,11 @@ useEffect(() => {
         password: authPassword,
       });
       if (error) {
-        setAuthError(error.message);
-        return;
-      }
+          setAuthError(error.message);
+          return;
+        }
       if (data.session) {
         setIsMenuAuthenticated(true);
-        localStorage.setItem(MENU_AUTH_KEY, "true");
         closeAuthDrawer();
       }
     } catch (error) {
@@ -3109,7 +3346,7 @@ useEffect(() => {
       const { error } = await supabaseBrowser.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/menu`,
+          redirectTo: getMenuAuthRedirectUrl(),
         },
       });
       if (error) {
@@ -3142,12 +3379,12 @@ useEffect(() => {
     setAuthMessage(null);
     try {
       const { error } = await supabaseBrowser.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/menu`,
+        redirectTo: getMenuAuthRedirectUrl(),
       });
       if (error) {
-        setAuthError(error.message);
-        return;
-      }
+          setAuthError(error.message);
+          return;
+        }
       setAuthMessage("Password reset email sent. Check your inbox.");
     } catch (error) {
       setAuthError(
@@ -3161,7 +3398,61 @@ useEffect(() => {
     }
   };
 
+  const handleResendSignupOtp = async () => {
+    if (!supabaseBrowser) {
+      setAuthError("Supabase auth is not configured yet.");
+      return;
+    }
+    const email = authEmail.trim();
+    if (!email) {
+      setAuthError("Enter your email first.");
+      return;
+    }
+
+    setAuthResendLoading(true);
+    setAuthError(null);
+    setAuthMessage(null);
+    try {
+      const { error } = await supabaseBrowser.auth.resend({
+        type: "signup",
+        email,
+        options: {
+          emailRedirectTo: getMenuAuthRedirectUrl(),
+        },
+      });
+      if (error) {
+          setAuthError(error.message);
+          return;
+        }
+      setAuthMessage("A new OTP has been sent to your email.");
+    } catch (error) {
+      setAuthError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not resend OTP right now. Please try again.",
+        ),
+      );
+    } finally {
+      setAuthResendLoading(false);
+    }
+  };
+
   const renderAuthControls = (compact = false) => {
+    if (!isMenuAuthenticated) {
+      return (
+        <Button
+          type="button"
+          onClick={() => openAuthDrawer("login")}
+          className={`rounded-full heading-font font-semibold ${
+            compact ? "h-8 px-3 text-xs" : "h-10 px-4 text-sm"
+          }`}
+          aria-label="Log in"
+        >
+          Log in
+        </Button>
+      );
+    }
+
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -3184,10 +3475,6 @@ useEffect(() => {
             <p className="text-xs text-gray-500 subtext-font">{accountEmail || "Add name and email"}</p>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => openAccountDrawer()} className="cursor-pointer">
-            <Pencil size={16} />
-            <span className="heading-font">Account</span>
-          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => setShowPastOrdersModal(true)}
             className="cursor-pointer"
@@ -3213,11 +3500,20 @@ useEffect(() => {
             <LifeBuoy size={16} />
             <span className="heading-font">Support</span>
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onClick={() => {
+              void handleMenuSignOut();
+            }}
+            className="cursor-pointer text-red-600 focus:text-red-600"
+          >
+            <LogOut size={16} />
+            <span className="heading-font">Sign out</span>
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     );
   };
-
   return (
     <motion.div
       initial={{ opacity: 0, x: 100 }}
@@ -3384,33 +3680,6 @@ useEffect(() => {
 
               <div className="flex-1 overflow-y-auto px-3 py-3">
                 <p className="px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 subtext-font">
-                  Categories
-                </p>
-                <div className="mt-2 space-y-1">
-                  {tabs.map((tab) => {
-                    const isCurrent = activeTab === tab || scrollActiveTab === tab;
-                    return (
-                      <button
-                        key={`sidebar-tab-${tab}`}
-                        type="button"
-                        onClick={() => {
-                          handleTabClick(tab);
-                          setShowSidebarMenu(false);
-                        }}
-                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${
-                          isCurrent
-                            ? "bg-black text-white heading-font"
-                            : "text-gray-700 hover:bg-gray-100 subtext-font"
-                        }`}
-                      >
-                        <span>{tab}</span>
-                        {isCurrent ? <Check size={14} /> : null}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <p className="mt-6 px-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400 subtext-font">
                   Quick Actions
                 </p>
                 <div className="mt-2 space-y-1">
@@ -3425,17 +3694,30 @@ useEffect(() => {
                     <ShoppingCart size={16} />
                     <span className="heading-font">View cart ({getCartItemCount()})</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowSidebarMenu(false);
-                      setShowPastOrdersModal(true);
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
-                  >
-                    <ClipboardList size={16} />
-                    <span className="heading-font">View past order</span>
-                  </button>
+                  {isMenuAuthenticated ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSidebarMenu(false);
+                        setShowPastOrdersModal(true);
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                    >
+                      <ClipboardList size={16} />
+                      <span className="heading-font">View past order</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSidebarMenu(false);
+                        openAuthDrawer("login");
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-gray-700 transition-colors hover:bg-gray-100"
+                    >
+                      <span className="heading-font">Log in</span>
+                    </button>
+                  )}
                   {hasTrackableOrders ? (
                     <button
                       type="button"
@@ -3493,7 +3775,7 @@ useEffect(() => {
                   <div>
                     <p className="text-xl font-semibold text-gray-900 heading-font">Account</p>
                     <p className="mt-1 text-sm text-gray-500 subtext-font">
-                      Save your name and email on this device.
+                      Edit your TableTap Profile.
                     </p>
                   </div>
                   <button
@@ -3509,12 +3791,21 @@ useEffect(() => {
                   className="mt-5 space-y-4 pb-[max(env(safe-area-inset-bottom),1rem)]"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void handleSaveAccountProfile();
+                    if (pendingEmailChange) {
+                      void handleVerifyPendingEmailChange();
+                    } else {
+                      void handleSaveAccountProfile();
+                    }
                   }}
                 >
                   {accountSaveError ? (
                     <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 subtext-font">
                       {accountSaveError}
+                    </p>
+                  ) : null}
+                  {accountSaveMessage ? (
+                    <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 subtext-font">
+                      {accountSaveMessage}
                     </p>
                   ) : null}
 
@@ -3525,7 +3816,8 @@ useEffect(() => {
                       value={displayNameDraft}
                       onChange={(event) => setDisplayNameDraft(event.target.value)}
                       maxLength={32}
-                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                      disabled={accountSaveLoading || Boolean(pendingEmailChange)}
+                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black disabled:cursor-not-allowed disabled:opacity-70"
                       placeholder="Enter your name"
                     />
                   </div>
@@ -3536,13 +3828,51 @@ useEffect(() => {
                       type="email"
                       value={accountEmailDraft}
                       onChange={(event) => setAccountEmailDraft(event.target.value)}
-                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                      disabled={Boolean(pendingEmailChange) || accountSaveLoading}
+                      className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black disabled:cursor-not-allowed disabled:opacity-70"
                       placeholder="you@example.com"
                     />
                   </div>
 
+                  {pendingEmailChange ? (
+                    <div className="space-y-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                      <p className="text-xs text-gray-600 subtext-font">
+                        Confirm email change for <span className="font-semibold text-gray-900">{pendingEmailChange}</span>
+                      </p>
+                      <input
+                        type="text"
+                        value={emailChangeOtp}
+                        onChange={(event) => setEmailChangeOtp(event.target.value)}
+                        className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                        placeholder="Enter OTP from email"
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleVerifyPendingEmailChange();
+                          }}
+                          disabled={emailChangeVerifying}
+                          className="rounded-xl bg-black px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-900 heading-font disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {emailChangeVerifying ? "Verifying..." : "Verify OTP"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleResendPendingEmailChangeOtp();
+                          }}
+                          disabled={emailChangeResending}
+                          className="rounded-xl border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 heading-font disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {emailChangeResending ? "Resending..." : "Resend OTP"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   <p className="text-xs text-gray-500 subtext-font">
-                    This information is saved on this device.
+                    This information is stored in your account profile.
                   </p>
 
                   <div className="flex items-center gap-2 pt-1">
@@ -3555,9 +3885,10 @@ useEffect(() => {
                     </button>
                     <button
                       type="submit"
-                      className="w-1/2 rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-900 heading-font"
+                      disabled={accountSaveLoading || Boolean(pendingEmailChange)}
+                      className="w-1/2 rounded-2xl bg-black px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-gray-900 heading-font disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Save
+                      {accountSaveLoading ? "Saving..." : pendingEmailChange ? "Awaiting OTP" : "Save"}
                     </button>
                   </div>
                 </form>
@@ -3741,6 +4072,14 @@ useEffect(() => {
                             required
                           />
                         </div>
+                        <button
+                          type="button"
+                          onClick={handleResendSignupOtp}
+                          className="text-sm font-medium text-gray-700 underline-offset-4 transition-colors hover:text-black hover:underline subtext-font disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={authLoading || authResendLoading}
+                        >
+                          {authResendLoading ? "Resending OTP..." : "Resend OTP"}
+                        </button>
                       </>
                     ) : (
                       <>
@@ -5413,3 +5752,11 @@ useEffect(() => {
     </motion.div>
   );
 }
+
+
+
+
+
+
+
+
