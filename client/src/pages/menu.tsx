@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from "framer-motion";
+﻿import { motion, AnimatePresence } from "framer-motion";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   Check,
@@ -1737,7 +1737,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
       return priceEntries
         .map((entry) => `${entry.option} Rs.${entry.price.toLocaleString()}/-`)
-        .join(" • ");
+        .join(" â€¢ ");
     }
 
     const basePrice = getBaseItemPrice(item, null);
@@ -3221,8 +3221,8 @@ useEffect(() => {
     return fallback;
   };
 
-  const getMenuAuthRedirectUrl = () =>
-    `${window.location.origin}/sip/menu`;
+  const getMenuAuthRedirectUrl = () => window.location.origin;
+
 
   const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5028,7 +5028,7 @@ useEffect(() => {
                         : "bg-black text-white"
                     }`}
                   >
-                    Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
+                    Add {itemQuantity + selectedSuggestedItems.length} to order â€¢ Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
                   </button>
                 </div>
               </div>
@@ -5348,7 +5348,7 @@ useEffect(() => {
                           <p className="mt-0.5 text-xs text-gray-500 subtext-font">
                             {order.tableLabel}
                             {order.placedAt
-                              ? ` • ${new Date(order.placedAt).toLocaleString()}`
+                              ? ` â€¢ ${new Date(order.placedAt).toLocaleString()}`
                               : ""}
                           </p>
                         </div>
