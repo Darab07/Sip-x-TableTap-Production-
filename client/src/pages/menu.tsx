@@ -1,4 +1,4 @@
-﻿import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   Check,
@@ -594,8 +594,11 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
   const [authOtp, setAuthOtp] = useState("");
-  const [authStep, setAuthStep] = useState<"credentials" | "verify-signup">("credentials");
+  const [authStep, setAuthStep] = useState<
+    "credentials" | "verify-signup" | "verify-recovery"
+  >("credentials");
   const [authLoading, setAuthLoading] = useState(false);
   const [authResendLoading, setAuthResendLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1737,7 +1740,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
 
       return priceEntries
         .map((entry) => `${entry.option} Rs.${entry.price.toLocaleString()}/-`)
-        .join(" â€¢ ");
+        .join(" • ");
     }
 
     const basePrice = getBaseItemPrice(item, null);
@@ -2719,6 +2722,7 @@ useEffect(() => {
     setPendingEmailChange(null);
     setEmailChangeOtp("");
     setAuthPassword("");
+    setAuthConfirmPassword("");
     setAuthOtp("");
     setAuthError(null);
     setAuthMessage(null);
@@ -3158,6 +3162,8 @@ useEffect(() => {
     setAuthMode(mode);
     setAuthStep("credentials");
     setIsPasswordRecoveryMode(false);
+    setAuthPassword("");
+    setAuthConfirmPassword("");
     setAuthOtp("");
     setAuthError(null);
     setAuthMessage(null);
@@ -3167,6 +3173,7 @@ useEffect(() => {
   const closeAuthDrawer = () => {
     setShowAuthDrawer(false);
     setAuthPassword("");
+    setAuthConfirmPassword("");
     setAuthOtp("");
     setAuthStep("credentials");
     setAuthError(null);
@@ -3257,8 +3264,39 @@ useEffect(() => {
         setAuthMessage("Password updated. You can now log in.");
         setIsPasswordRecoveryMode(false);
         setAuthMode("login");
+        setAuthStep("credentials");
+        setAuthOtp("");
         setNewPassword("");
         setConfirmNewPassword("");
+        return;
+      }
+
+      if (authStep === "verify-recovery") {
+        const email = authEmail.trim().toLowerCase();
+        const token = authOtp.trim();
+        if (!email) {
+          setAuthError("Enter your email first.");
+          return;
+        }
+        if (!token) {
+          setAuthError("Enter the OTP code sent to your email.");
+          return;
+        }
+
+        const { error } = await supabaseBrowser.auth.verifyOtp({
+          email,
+          token,
+          type: "recovery",
+        });
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+
+        setIsPasswordRecoveryMode(true);
+        setAuthStep("credentials");
+        setAuthOtp("");
+        setAuthMessage("OTP verified. Set your new password.");
         return;
       }
 
@@ -3284,10 +3322,21 @@ useEffect(() => {
       }
 
       if (authMode === "signup") {
+        const signupPassword = authPassword.trim();
+        const signupConfirmPassword = authConfirmPassword.trim();
+        if (!signupPassword || signupPassword.length < 6) {
+          setAuthError("Password must be at least 6 characters.");
+          return;
+        }
+        if (signupPassword !== signupConfirmPassword) {
+          setAuthError("Passwords do not match.");
+          return;
+        }
+
         const nameValue = displayNameDraft.trim().slice(0, 32);
         const { data, error } = await supabaseBrowser.auth.signUp({
           email: authEmail.trim(),
-          password: authPassword,
+          password: signupPassword,
           options: {
             data: {
               display_name: nameValue || `User ${userId}`,
@@ -3328,9 +3377,9 @@ useEffect(() => {
         password: authPassword,
       });
       if (error) {
-          setAuthError(error.message);
-          return;
-        }
+        setAuthError(error.message);
+        return;
+      }
       if (data.session) {
         setIsMenuAuthenticated(true);
         closeAuthDrawer();
@@ -3381,7 +3430,7 @@ useEffect(() => {
       setAuthError("Supabase auth is not configured yet.");
       return;
     }
-    const email = authEmail.trim();
+    const email = authEmail.trim().toLowerCase();
     if (!email) {
       setAuthError("Enter your email first.");
       return;
@@ -3394,10 +3443,15 @@ useEffect(() => {
         redirectTo: getMenuAuthRedirectUrl(),
       });
       if (error) {
-          setAuthError(error.message);
-          return;
-        }
-      setAuthMessage("Password reset email sent. Check your inbox.");
+        setAuthError(error.message);
+        return;
+      }
+      setAuthStep("verify-recovery");
+      setIsPasswordRecoveryMode(false);
+      setAuthOtp("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setAuthMessage("We sent a password reset OTP to your email. Enter it below.");
     } catch (error) {
       setAuthError(
         normalizeAuthErrorMessage(
@@ -3407,6 +3461,41 @@ useEffect(() => {
       );
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const handleResendRecoveryOtp = async () => {
+    if (!supabaseBrowser) {
+      setAuthError("Supabase auth is not configured yet.");
+      return;
+    }
+    const email = authEmail.trim().toLowerCase();
+    if (!email) {
+      setAuthError("Enter your email first.");
+      return;
+    }
+
+    setAuthResendLoading(true);
+    setAuthError(null);
+    setAuthMessage(null);
+    try {
+      const { error } = await supabaseBrowser.auth.resetPasswordForEmail(email, {
+        redirectTo: getMenuAuthRedirectUrl(),
+      });
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+      setAuthMessage("A new password reset OTP has been sent to your email.");
+    } catch (error) {
+      setAuthError(
+        normalizeAuthErrorMessage(
+          error,
+          "Could not resend OTP right now. Please try again.",
+        ),
+      );
+    } finally {
+      setAuthResendLoading(false);
     }
   };
 
@@ -3557,7 +3646,7 @@ useEffect(() => {
                   className="h-full bg-[#91bda6] transition-[width] duration-100"
                   style={{ width: `${waiterBannerProgress}%` }}
                 />
-              </div>
+                  </div>
             </Card>
           </motion.div>
         ) : null}
@@ -3937,16 +4026,20 @@ useEffect(() => {
                     <p className="text-xl font-semibold text-gray-900 heading-font">
                       {isPasswordRecoveryMode
                         ? "Reset password"
-                        : authMode === "signup"
-                          ? "Create account"
-                          : "Log in"}
+                        : authStep === "verify-recovery"
+                          ? "Verify reset OTP"
+                          : authMode === "signup"
+                            ? "Create account"
+                            : "Log in"}
                     </p>
                     <p className="mt-1 text-sm text-gray-500 subtext-font">
                       {isPasswordRecoveryMode
                         ? "Set a new password for your account."
-                        : authMode === "signup"
-                          ? "Sign up to save your details and track orders faster."
-                          : "Log in to access your account features."}
+                        : authStep === "verify-recovery"
+                          ? "Enter the OTP sent to your email to continue."
+                          : authMode === "signup"
+                            ? "Sign up to save your details and track orders faster."
+                            : "Log in to access your account features."}
                     </p>
                   </div>
                   <button
@@ -3959,7 +4052,7 @@ useEffect(() => {
                   </button>
                 </div>
 
-                {!isPasswordRecoveryMode ? (
+                {!isPasswordRecoveryMode && authStep !== "verify-recovery" ? (
                   <div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1">
                     <button
                       type="button"
@@ -4014,7 +4107,7 @@ useEffect(() => {
                         <div className="relative">
                           <div className="absolute inset-0 flex items-center">
                             <div className="w-full border-t border-gray-200" />
-                          </div>
+                  </div>
                           <div className="relative flex justify-center">
                             <span className="bg-white px-3 text-xs text-gray-400 subtext-font">
                               or continue with email
@@ -4047,7 +4140,7 @@ useEffect(() => {
                             placeholder="At least 6 characters"
                             required
                           />
-                        </div>
+                  </div>
                         <div>
                           <label className="text-sm font-medium text-gray-700 subtext-font">Confirm Password</label>
                           <input
@@ -4058,7 +4151,40 @@ useEffect(() => {
                             placeholder="Re-enter your new password"
                             required
                           />
-                        </div>
+                  </div>
+                      </>
+                    ) : authStep === "verify-recovery" ? (
+                      <>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">Email</label>
+                          <input
+                            type="email"
+                            value={authEmail}
+                            onChange={(event) => setAuthEmail(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="you@example.com"
+                            required
+                          />
+                  </div>
+                        <div>
+                          <label className="text-sm font-medium text-gray-700 subtext-font">OTP Code</label>
+                          <input
+                            type="text"
+                            value={authOtp}
+                            onChange={(event) => setAuthOtp(event.target.value)}
+                            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                            placeholder="Enter OTP from email"
+                            required
+                          />
+                  </div>
+                        <button
+                          type="button"
+                          onClick={handleResendRecoveryOtp}
+                          className="text-sm font-medium text-gray-700 underline-offset-4 transition-colors hover:text-black hover:underline subtext-font disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={authLoading || authResendLoading}
+                        >
+                          {authResendLoading ? "Resending OTP..." : "Resend OTP"}
+                        </button>
                       </>
                     ) : authMode === "signup" && authStep === "verify-signup" ? (
                       <>
@@ -4072,7 +4198,7 @@ useEffect(() => {
                             placeholder="you@example.com"
                             required
                           />
-                        </div>
+                  </div>
                         <div>
                           <label className="text-sm font-medium text-gray-700 subtext-font">OTP Code</label>
                           <input
@@ -4083,7 +4209,7 @@ useEffect(() => {
                             placeholder="Enter OTP from email"
                             required
                           />
-                        </div>
+                  </div>
                         <button
                           type="button"
                           onClick={handleResendSignupOtp}
@@ -4106,7 +4232,7 @@ useEffect(() => {
                               className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
                               placeholder="Enter your name"
                             />
-                          </div>
+                  </div>
                         ) : null}
                         <div>
                           <label className="text-sm font-medium text-gray-700 subtext-font">Email</label>
@@ -4118,7 +4244,7 @@ useEffect(() => {
                             placeholder="you@example.com"
                             required
                           />
-                        </div>
+                  </div>
                         <div>
                           <label className="text-sm font-medium text-gray-700 subtext-font">Password</label>
                           <input
@@ -4129,7 +4255,20 @@ useEffect(() => {
                             placeholder="Enter password"
                             required
                           />
-                        </div>
+                  </div>
+                        {authMode === "signup" ? (
+                          <div>
+                            <label className="text-sm font-medium text-gray-700 subtext-font">Confirm Password</label>
+                            <input
+                              type="password"
+                              value={authConfirmPassword}
+                              onChange={(event) => setAuthConfirmPassword(event.target.value)}
+                              className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-black"
+                              placeholder="Re-enter password"
+                              required
+                            />
+                  </div>
+                        ) : null}
                         {authMode === "login" ? (
                           <button
                             type="button"
@@ -4151,8 +4290,9 @@ useEffect(() => {
                       {authLoading
                         ? "Please wait..."
                         : isPasswordRecoveryMode
-                          ? "Update password"
-                          : authMode === "signup" && authStep === "verify-signup"
+                          ? "Set new password"
+                          : authStep === "verify-recovery" ||
+                              (authMode === "signup" && authStep === "verify-signup")
                             ? "Verify OTP"
                             : authMode === "signup"
                               ? "Sign up"
@@ -4229,7 +4369,7 @@ useEffect(() => {
             className="shrink-0"
             style={{ height: "6rem", width: "auto", display: "block" }}
           />
-        </div>
+                  </div>
         <div className="flex items-center gap-2">
           {renderAuthControls(false)}
         </div>
@@ -4244,7 +4384,7 @@ useEffect(() => {
             className="h-full w-full object-cover object-bottom"
           />
           <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/10 to-transparent" />
-        </div>
+                  </div>
 
         <div className="absolute top-4 left-4 text-xs text-white space-y-1">
           {isSessionLocked && (
@@ -4302,7 +4442,7 @@ useEffect(() => {
                   placeholder="Search menu"
                   className="bg-transparent text-sm w-full focus:outline-none subtext-font placeholder:text-gray-400"
                 />
-              </div>
+                  </div>
             </div>
           </div>
           <div className="flex overflow-x-auto space-x-8 px-4 pb-3">
@@ -4357,7 +4497,7 @@ useEffect(() => {
                           times: [0, 0.75, 0.9, 1],
                         }}
                       />
-                    </div>
+                  </div>
                   );
                 }
 
@@ -4464,7 +4604,7 @@ useEffect(() => {
                 alt="SIP logo"
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover"
               />
-            </div>
+                  </div>
           </div>
           <p className="text-xs uppercase tracking-[0.3em] text-gray-500 subtext-font">Table Tap</p>
           <h1 className="mt-2 text-3xl font-semibold text-gray-900 heading-font">{RESTAURANT.name}</h1>
@@ -4669,7 +4809,7 @@ useEffect(() => {
                        }`}
                      >
                        <Plus size={14} />
-                     </div>
+                  </div>
                    </div>
                  </button>
                );
@@ -4711,7 +4851,7 @@ useEffect(() => {
                        }`}
                      >
                        <Plus size={14} />
-                     </div>
+                  </div>
                    </div>
                  </button>
                );
@@ -4753,7 +4893,7 @@ useEffect(() => {
                        }`}
                      >
                        <Plus size={14} />
-                     </div>
+                  </div>
                    </div>
                  </button>
                );
@@ -4795,7 +4935,7 @@ useEffect(() => {
                        }`}
                      >
                        <Plus size={14} />
-                     </div>
+                  </div>
                    </div>
                  </button>
                );
@@ -5028,7 +5168,7 @@ useEffect(() => {
                         : "bg-black text-white"
                     }`}
                   >
-                    Add {itemQuantity + selectedSuggestedItems.length} to order â€¢ Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
+                    Add {itemQuantity + selectedSuggestedItems.length} to order • Rs.{((getSelectedItemPrice(selectedItem, selectedEggType, selectedTemperature, selectedAddOns) * itemQuantity) + getSuggestedSelectionTotal()).toLocaleString()}/-
                   </button>
                 </div>
               </div>
@@ -5052,7 +5192,7 @@ useEffect(() => {
               </button>
               <div className="text-lg font-semibold heading-font">{RESTAURANT.name}</div>
               <div className="w-10" />
-            </div>
+                  </div>
 
             <div className="px-5 space-y-4 overflow-y-auto flex-1">
               <div>
@@ -5251,7 +5391,7 @@ useEffect(() => {
                           placeholder="Add any notes for your order"
                           className="mt-3 w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-800 outline-none transition-colors placeholder:text-gray-400 focus:border-black subtext-font"
                         />
-                      </div>
+                  </div>
                     </div>
                   </>
                 )}
@@ -5348,7 +5488,7 @@ useEffect(() => {
                           <p className="mt-0.5 text-xs text-gray-500 subtext-font">
                             {order.tableLabel}
                             {order.placedAt
-                              ? ` â€¢ ${new Date(order.placedAt).toLocaleString()}`
+                              ? ` • ${new Date(order.placedAt).toLocaleString()}`
                               : ""}
                           </p>
                         </div>
@@ -5617,7 +5757,7 @@ useEffect(() => {
                   <img src="/Visa.png" alt="Visa" className="h-8" />
                   <img src="/MasterCard.png" alt="MasterCard" className="h-8" />
                   <img src="/UnionPay.png" alt="UnionPay" className="h-8" />
-                </div>
+                  </div>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="col-span-2">
                     <label className="text-gray-500">Cardholder name</label>
@@ -5764,6 +5904,16 @@ useEffect(() => {
     </motion.div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
