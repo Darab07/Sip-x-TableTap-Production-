@@ -41,7 +41,7 @@ export type MenuCatalogResponse = {
   items: MenuItemCatalog[];
 };
 
-const DEFAULT_BRANCH = "f7-islamabad";
+const DEFAULT_BRANCH = String(process.env.DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 const OUTLET_CACHE_TTL_MS = 5 * 60 * 1000;
 const MENU_CATALOG_CACHE_TTL_MS = 2 * 60 * 1000;
 const MENU_NAME_LOOKUP_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -109,7 +109,26 @@ const isAllowedCatalogItem = (categorySlug: string, itemName: string) => {
 type OutletRow = {
   id: string;
   branch_code: string;
+  service_start_time: string | null;
+  service_end_time: string | null;
+  last_takeaway_time: string | null;
+  timezone: string | null;
 };
+
+export type OutletOrderingSettings = {
+  branchCode: string;
+  serviceStartTime: string;
+  serviceEndTime: string;
+  lastTakeawayTime: string;
+  timezone: string;
+  serviceHoursLabel: string;
+  lastTakeawayLabel: string;
+};
+
+const DEFAULT_SERVICE_START_TIME = "08:00";
+const DEFAULT_SERVICE_END_TIME = "01:00";
+const DEFAULT_LAST_TAKEAWAY_TIME = "00:30";
+const DEFAULT_OUTLET_TIMEZONE = "Asia/Karachi";
 
 const outletCache = new Map<string, { expiresAt: number; value: OutletRow }>();
 const menuCatalogCache = new Map<
@@ -132,6 +151,128 @@ const invalidateOutletDerivedCaches = (outletId: string) => {
   });
 };
 
+const normalizeTimeValue = (value: string | null | undefined, fallback: string) => {
+  const normalized = String(value ?? "").trim();
+  const match = normalized.match(/^(\d{2}):(\d{2})/);
+  if (!match) return fallback;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return fallback;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return fallback;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+};
+
+const toMinutes = (value: string) => {
+  const [hourRaw, minuteRaw] = value.split(":");
+  const hours = Number(hourRaw);
+  const minutes = Number(minuteRaw);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+    return 0;
+  }
+  return hours * 60 + minutes;
+};
+
+const formatTimeLabel = (value: string) => {
+  const [hourRaw, minuteRaw] = value.split(":");
+  const hours = Number(hourRaw);
+  const minutes = Number(minuteRaw);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return value;
+  const period = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${String(minutes).padStart(2, "0")} ${period}`;
+};
+
+const getCurrentMinutesInTimezone = (timezone: string) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+
+    const hour = Number(parts.find((part) => part.type === "hour")?.value ?? "0");
+    const minute = Number(parts.find((part) => part.type === "minute")?.value ?? "0");
+    return hour * 60 + minute;
+  } catch {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  }
+};
+
+const isWithinTimeWindow = (nowMinutes: number, startMinutes: number, endMinutes: number) => {
+  if (startMinutes === endMinutes) return true;
+  if (startMinutes < endMinutes) {
+    return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  }
+  return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+};
+
+const getOutletOrderingSettingsFromRow = (
+  outlet: OutletRow,
+): OutletOrderingSettings => {
+  const serviceStartTime = normalizeTimeValue(
+    outlet.service_start_time,
+    DEFAULT_SERVICE_START_TIME,
+  );
+  const serviceEndTime = normalizeTimeValue(
+    outlet.service_end_time,
+    DEFAULT_SERVICE_END_TIME,
+  );
+  const lastTakeawayTime = normalizeTimeValue(
+    outlet.last_takeaway_time,
+    DEFAULT_LAST_TAKEAWAY_TIME,
+  );
+  const timezone =
+    String(outlet.timezone ?? "").trim() || DEFAULT_OUTLET_TIMEZONE;
+
+  return {
+    branchCode: outlet.branch_code,
+    serviceStartTime,
+    serviceEndTime,
+    lastTakeawayTime,
+    timezone,
+    serviceHoursLabel: `${formatTimeLabel(serviceStartTime)} - ${formatTimeLabel(serviceEndTime)}`,
+    lastTakeawayLabel: formatTimeLabel(lastTakeawayTime),
+  };
+};
+
+const getOutletOrderingState = (outlet: OutletRow) => {
+  const settings = getOutletOrderingSettingsFromRow(outlet);
+  const nowMinutes = getCurrentMinutesInTimezone(settings.timezone);
+  const startMinutes = toMinutes(settings.serviceStartTime);
+  const endMinutes = toMinutes(settings.serviceEndTime);
+  const lastOrderMinutes = toMinutes(settings.lastTakeawayTime);
+
+  const withinServiceHours = isWithinTimeWindow(nowMinutes, startMinutes, endMinutes);
+  const beforeLastTakeawayCutoff = isWithinTimeWindow(
+    nowMinutes,
+    startMinutes,
+    lastOrderMinutes,
+  );
+
+  const orderingOpenNow = withinServiceHours && beforeLastTakeawayCutoff;
+
+  let closedReason = "";
+  if (!withinServiceHours) {
+    closedReason = `Restaurant is currently closed. Open hours: ${settings.serviceHoursLabel}.`;
+  } else if (!beforeLastTakeawayCutoff) {
+    closedReason = `Restaurant is open, but last takeaway time (${settings.lastTakeawayLabel}) has passed.`;
+  }
+
+  return {
+    ...settings,
+    withinServiceHours,
+    beforeLastTakeawayCutoff,
+    orderingOpenNow,
+    closedReason,
+  };
+};
+
+const invalidateOutletCacheByBranchCode = (branchCode: string) => {
+  outletCache.delete(branchCode);
+  menuCatalogCache.delete(branchCode);
+};
 const hasOrdersCustomerAuthUserIdColumn = async () => {
   if (ordersHasCustomerAuthUserIdColumn !== null) {
     return ordersHasCustomerAuthUserIdColumn;
@@ -175,7 +316,7 @@ export const getOutletByBranchCode = async (branchCode = DEFAULT_BRANCH) => {
   const supabase = assertSupabaseAdmin();
   const { data, error } = await supabase
     .from("outlets")
-    .select("id,branch_code")
+    .select("id,branch_code,service_start_time,service_end_time,last_takeaway_time,timezone")
     .eq("branch_code", branchCode)
     .single<OutletRow>();
 
@@ -189,6 +330,56 @@ export const getOutletByBranchCode = async (branchCode = DEFAULT_BRANCH) => {
   return data;
 };
 
+export const getOutletOrderingSettingsForBranch = async (
+  branchCode = DEFAULT_BRANCH,
+): Promise<OutletOrderingSettings> => {
+  const outlet = await getOutletByBranchCode(branchCode);
+  return getOutletOrderingSettingsFromRow(outlet);
+};
+
+export const updateOutletOrderingSettingsForBranch = async (input: {
+  branchCode?: string;
+  serviceStartTime: string;
+  serviceEndTime: string;
+  lastTakeawayTime: string;
+  timezone?: string;
+}): Promise<OutletOrderingSettings> => {
+  const branchCode = input.branchCode || DEFAULT_BRANCH;
+  const serviceStartTime = normalizeTimeValue(
+    input.serviceStartTime,
+    DEFAULT_SERVICE_START_TIME,
+  );
+  const serviceEndTime = normalizeTimeValue(
+    input.serviceEndTime,
+    DEFAULT_SERVICE_END_TIME,
+  );
+  const lastTakeawayTime = normalizeTimeValue(
+    input.lastTakeawayTime,
+    DEFAULT_LAST_TAKEAWAY_TIME,
+  );
+  const timezone =
+    String(input.timezone ?? "").trim() || DEFAULT_OUTLET_TIMEZONE;
+
+  const supabase = assertSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outlets")
+    .update({
+      service_start_time: `${serviceStartTime}:00`,
+      service_end_time: `${serviceEndTime}:00`,
+      last_takeaway_time: `${lastTakeawayTime}:00`,
+      timezone,
+    })
+    .eq("branch_code", branchCode)
+    .select("id,branch_code,service_start_time,service_end_time,last_takeaway_time,timezone")
+    .single<OutletRow>();
+
+  if (error || !data) {
+    throw new Error(error?.message ?? "Unable to update outlet timings");
+  }
+
+  invalidateOutletCacheByBranchCode(branchCode);
+  return getOutletOrderingSettingsFromRow(data);
+};
 export const getMenuCatalogForBranch = async (
   branchCode = DEFAULT_BRANCH,
 ): Promise<MenuCatalogResponse> => {
@@ -530,10 +721,10 @@ const ensureTableAndSession = async (
   const autoCreateTable = Boolean(options?.autoCreateTable);
   let { data: table, error: tableError } = await supabase
     .from("restaurant_tables")
-    .select("id,table_label,status")
+    .select("id,table_number,table_label,status")
     .eq("outlet_id", outletId)
     .eq("table_number", tableNumber)
-    .single<{ id: string; table_label: string; status: string }>();
+    .single<{ id: string; table_number: number; table_label: string; status: string }>();
 
   if (autoCreateTable && tableError && tableError.code === "PGRST116") {
     const inserted = await supabase
@@ -544,8 +735,8 @@ const ensureTableAndSession = async (
         status: "available",
         seats: 4,
       })
-      .select("id,table_label,status")
-      .single<{ id: string; table_label: string; status: string }>();
+      .select("id,table_number,table_label,status")
+      .single<{ id: string; table_number: number; table_label: string; status: string }>();
     table = inserted.data ?? null;
     tableError = inserted.error ?? null;
   }
@@ -585,7 +776,7 @@ const ensureTableAndSession = async (
 
   return {
     tableId: table.id,
-    tableLabel: table.table_label,
+    tableLabel: getDisplayTableLabel(Number(table.table_number), table.table_label),
     tableStatus: table.status,
     tableSessionId: session.id,
   };
@@ -594,10 +785,44 @@ const ensureTableAndSession = async (
 export type PublicTableAccess = {
   tableNumber: number;
   tableLabel: string;
+  accessType: "table" | "takeaway";
   tableStatus: string;
   hasQrCode: boolean;
   orderingEnabled: boolean;
   message: string;
+  serviceStartTime: string;
+  serviceEndTime: string;
+  lastTakeawayTime: string;
+  timezone: string;
+  serviceHoursLabel: string;
+  lastTakeawayLabel: string;
+};
+
+const isTakeawayLabel = (value: string | null | undefined) =>
+  String(value ?? "").trim().toLowerCase().startsWith("takeaway");
+
+const getTakeawayStandNumber = (tableNumber: number) =>
+  Math.max(1, Number(tableNumber) - TAKEAWAY_TABLE_NUMBER_BASE + 1);
+
+const getDisplayTableLabel = (tableNumber: number, tableLabel?: string | null) => {
+  const normalizedTableNumber = Number(tableNumber);
+  const normalizedLabel = String(tableLabel ?? "").trim();
+
+  if (normalizedTableNumber >= TAKEAWAY_TABLE_NUMBER_BASE) {
+    return `Stand ${getTakeawayStandNumber(normalizedTableNumber)}`;
+  }
+
+  const takeawayMatch = normalizedLabel.match(/^takeaway\s*(\d+)$/i);
+  if (takeawayMatch) {
+    return `Stand ${Number(takeawayMatch[1])}`;
+  }
+
+  const tableMatch = normalizedLabel.match(/^table\s*(\d+)$/i);
+  if (tableMatch && Number(tableMatch[1]) >= TAKEAWAY_TABLE_NUMBER_BASE) {
+    return `Stand ${getTakeawayStandNumber(Number(tableMatch[1]))}`;
+  }
+
+  return normalizedLabel || `Table${normalizedTableNumber}`;
 };
 
 export const getPublicTableAccess = async (
@@ -609,29 +834,54 @@ export const getPublicTableAccess = async (
   }
   const supabase = assertSupabaseAdmin();
   const outlet = await getOutletByBranchCode(branchCode);
+  const orderingState = getOutletOrderingState(outlet);
 
   const tableResult = await supabase
     .from("restaurant_tables")
-    .select("id,table_label,status")
+    .select("id,table_number,table_label,status")
     .eq("outlet_id", outlet.id)
     .eq("table_number", Math.round(tableNumber))
-    .maybeSingle<{ id: string; table_label: string; status: string }>();
+    .maybeSingle<{ id: string; table_number: number; table_label: string; status: string }>();
 
   if (tableResult.error) {
     throw new Error(tableResult.error.message);
   }
+
+  const roundedTableNumber = Math.round(tableNumber);
+  const accessTypeForUnknown: "table" | "takeaway" =
+    roundedTableNumber >= TAKEAWAY_TABLE_NUMBER_BASE ? "takeaway" : "table";
+  const unknownLabel =
+    accessTypeForUnknown === "takeaway"
+      ? getDisplayTableLabel(roundedTableNumber)
+      : "Table" + roundedTableNumber;
+  const schedulePayloadForType = (accessType: "table" | "takeaway") => ({
+    serviceStartTime: orderingState.serviceStartTime,
+    serviceEndTime: orderingState.serviceEndTime,
+    lastTakeawayTime: orderingState.lastTakeawayTime,
+    timezone: orderingState.timezone,
+    serviceHoursLabel: orderingState.serviceHoursLabel,
+    lastTakeawayLabel: accessType === "takeaway" ? orderingState.lastTakeawayLabel : "",
+  });
+
   if (!tableResult.data) {
     return {
-      tableNumber: Math.round(tableNumber),
-      tableLabel: `Table${Math.round(tableNumber)}`,
+      tableNumber: roundedTableNumber,
+      tableLabel: unknownLabel,
+      accessType: accessTypeForUnknown,
       tableStatus: "unknown",
       hasQrCode: false,
       orderingEnabled: false,
       message: "This table is not configured in the restaurant.",
+      ...schedulePayloadForType(accessTypeForUnknown),
     };
   }
 
   const table = tableResult.data;
+  const accessType: "table" | "takeaway" =
+    roundedTableNumber >= TAKEAWAY_TABLE_NUMBER_BASE || isTakeawayLabel(table.table_label)
+      ? "takeaway"
+      : "table";
+
   const qrResult = await supabase
     .from("table_qr_codes")
     .select("id")
@@ -649,34 +899,68 @@ export const getPublicTableAccess = async (
 
   if (!hasQrCode) {
     return {
-      tableNumber: Math.round(tableNumber),
-      tableLabel: table.table_label,
+      tableNumber: roundedTableNumber,
+      tableLabel: getDisplayTableLabel(roundedTableNumber, table.table_label),
+      accessType,
       tableStatus: normalizedStatus,
       hasQrCode: false,
       orderingEnabled: false,
       message: "QR for this table is not active. Please contact staff.",
+      ...schedulePayloadForType(accessType),
     };
   }
 
   if (normalizedStatus === "unavailable") {
     return {
       tableNumber: Math.round(tableNumber),
-      tableLabel: table.table_label,
+      tableLabel: getDisplayTableLabel(roundedTableNumber, table.table_label),
+      accessType,
       tableStatus: normalizedStatus,
       hasQrCode: true,
       orderingEnabled: false,
       message:
-        "This table has been marked unavailable and cannot be used to place an order.",
+        accessType === "takeaway"
+          ? "Takeaway orders are currently unavailable. Please contact staff."
+          : "This table has been marked unavailable and cannot be used to place an order.",
+      ...schedulePayloadForType(accessType),
+    };
+  }
+
+  if (!orderingState.withinServiceHours) {
+    return {
+      tableNumber: Math.round(tableNumber),
+      tableLabel: getDisplayTableLabel(roundedTableNumber, table.table_label),
+      accessType,
+      tableStatus: normalizedStatus,
+      hasQrCode: true,
+      orderingEnabled: false,
+      message: `Restaurant is currently closed. Open hours: ${orderingState.serviceHoursLabel}.`,
+      ...schedulePayloadForType(accessType),
+    };
+  }
+
+  if (accessType === "takeaway" && !orderingState.beforeLastTakeawayCutoff) {
+    return {
+      tableNumber: Math.round(tableNumber),
+      tableLabel: getDisplayTableLabel(roundedTableNumber, table.table_label),
+      accessType,
+      tableStatus: normalizedStatus,
+      hasQrCode: true,
+      orderingEnabled: false,
+      message: `Takeaway is closed now. Last takeaway time (${orderingState.lastTakeawayLabel}) has passed.`,
+      ...schedulePayloadForType(accessType),
     };
   }
 
   return {
     tableNumber: Math.round(tableNumber),
-    tableLabel: table.table_label,
+    tableLabel: getDisplayTableLabel(Number(table.table_number), table.table_label),
+    accessType,
     tableStatus: normalizedStatus,
     hasQrCode: true,
     orderingEnabled: true,
-    message: "Table is active for ordering.",
+    message: accessType === "takeaway" ? "Takeaway is active for ordering." : "Table is active for ordering.",
+    ...schedulePayloadForType(accessType),
   };
 };
 
@@ -1093,7 +1377,7 @@ export const getManagerLiveOrders = async (branchCode = DEFAULT_BRANCH) => {
   const { data: orderRows, error } = await supabase
     .from("orders")
     .select(
-      "id,order_number,status,placed_at,notes,table_id,restaurant_tables(table_number),order_items(quantity,item_name_snapshot)",
+      "id,order_number,status,placed_at,notes,table_id,restaurant_tables(table_number,table_label),order_items(quantity,item_name_snapshot)",
     )
     .eq("outlet_id", outlet.id)
     .in("status", ["placed", "confirmed", "accepted", "preparing", "ready", "served", "completed"])
@@ -1108,7 +1392,7 @@ export const getManagerLiveOrders = async (branchCode = DEFAULT_BRANCH) => {
     quantity: number | null;
     item_name_snapshot: string | null;
   };
-  type ManagerLiveOrderTableRelation = { table_number: number | null } | null;
+  type ManagerLiveOrderTableRelation = { table_number: number | null; table_label?: string | null } | null;
   type ManagerLiveOrderRow = {
     id: string;
     order_number: string;
@@ -1134,7 +1418,11 @@ export const getManagerLiveOrders = async (branchCode = DEFAULT_BRANCH) => {
     return {
       id: typedRow.id,
       orderNumber: typedRow.order_number,
-      tableNumber: `T-${String(tableRelation?.table_number ?? 0).padStart(2, "0")}`,
+      tableNumber:
+        Number(tableRelation?.table_number ?? 0) >= TAKEAWAY_TABLE_NUMBER_BASE ||
+        isTakeawayLabel(tableRelation?.table_label)
+          ? "Takeaway"
+          : `T-${String(tableRelation?.table_number ?? 0).padStart(2, "0")}`,
       placedAt: typedRow.placed_at,
       orderedItems,
       hasOrderNotes: Boolean(orderNotes),
@@ -1480,7 +1768,7 @@ type HistoryOrderItemRow = {
   special_instructions: string | null;
 };
 
-type HistoryTableRelation = { table_label: string | null } | null;
+type HistoryTableRelation = { table_label: string | null; table_number: number | null } | null;
 
 type HistoryOrderRow = {
   order_number: string;
@@ -1507,7 +1795,7 @@ const mapHistoryRowsToCustomerOrders = (
 
     return {
       orderNumber: String(row.order_number),
-      tableLabel: String(tableRelation?.table_label ?? "Table"),
+      tableLabel: getDisplayTableLabel(Number(tableRelation?.table_number ?? 0), String(tableRelation?.table_label ?? "Table")),
       status: toCustomerTrackerStatus(String(row.status)) as
         | "placed"
         | "confirmed"
@@ -1552,7 +1840,7 @@ const getCustomerOrderHistoryByDeviceIds = async (input: {
   const { data, error } = await supabase
     .from("orders")
     .select(
-      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label,table_number),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
     )
     .eq("outlet_id", input.outletId)
     .in("customer_device_id", deviceIds)
@@ -1616,7 +1904,7 @@ const getCustomerOrderHistoryByAuthUserId = async (input: {
   const { data, error } = await supabase
     .from("orders")
     .select(
-      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
+      "order_number,status,notes,subtotal,tip_amount,service_fee,tax_amount,total_amount,placed_at,restaurant_tables(table_label,table_number),order_items(item_name_snapshot,quantity,unit_price,special_instructions)",
     )
     .eq("outlet_id", input.outletId)
     .eq("customer_auth_user_id", normalizedAuthUserId)
@@ -1672,6 +1960,137 @@ export const getCustomerOrderHistoryForAccount = async (input: {
     .slice(0, safeLimit);
 };
 
+
+export type CustomerLoyaltySummary = {
+  stampsInCycle: number;
+  stampTarget: number;
+  totalCoffeeDays: number;
+  rewardsUnlocked: number;
+  daysRemaining: number;
+  freeCoffeeAvailable: boolean;
+};
+
+type LoyaltyMenuCategoryRelation = { slug: string | null } | null;
+
+type LoyaltyMenuItemRow = {
+  name: string | null;
+  menu_categories: LoyaltyMenuCategoryRelation | LoyaltyMenuCategoryRelation[];
+};
+
+const LOYALTY_STAMP_TARGET = 10;
+const LOYALTY_TIMEZONE = "Asia/Karachi";
+
+export const getCustomerLoyaltySummaryForAccount = async (input: {
+  customerAuthUserId: string;
+  customerEmail?: string;
+  branchCode?: string;
+}): Promise<CustomerLoyaltySummary> => {
+  const normalizedAuthUserId = String(input.customerAuthUserId ?? "").trim();
+  if (!normalizedAuthUserId) {
+    throw new Error("customerAuthUserId is required");
+  }
+
+  const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
+  const supabase = assertSupabaseAdmin();
+
+  const menuRowsResult = await supabase
+    .from("menu_items")
+    .select("name,menu_categories(slug)")
+    .eq("outlet_id", outlet.id);
+
+  if (menuRowsResult.error) {
+    throw new Error(menuRowsResult.error.message);
+  }
+
+  const eligibleCoffeeNames = new Set<string>();
+  for (const row of (menuRowsResult.data ?? []) as unknown as LoyaltyMenuItemRow[]) {
+    const categoryRelation = Array.isArray(row.menu_categories)
+      ? row.menu_categories[0]
+      : row.menu_categories;
+    if (String(categoryRelation?.slug ?? "").trim().toLowerCase() !== "coffee") {
+      continue;
+    }
+
+    const { trimmed, base } = normalizeMenuLookupKey(String(row.name ?? ""));
+    if (trimmed) eligibleCoffeeNames.add(trimmed);
+    if (base) eligibleCoffeeNames.add(base);
+  }
+
+  if (!eligibleCoffeeNames.size) {
+    return {
+      stampsInCycle: 0,
+      stampTarget: LOYALTY_STAMP_TARGET,
+      totalCoffeeDays: 0,
+      rewardsUnlocked: 0,
+      daysRemaining: LOYALTY_STAMP_TARGET,
+      freeCoffeeAvailable: false,
+    };
+  }
+
+  const orders = await getCustomerOrderHistoryForAccount({
+    customerAuthUserId: normalizedAuthUserId,
+    customerEmail: input.customerEmail,
+    branchCode: input.branchCode,
+    limit: 5000,
+  });
+
+  const nonQualifyingStatuses = new Set([
+    "cancelled",
+    "canceled",
+    "failed",
+    "refunded",
+    "payment_failed",
+    "voided",
+  ]);
+
+  const stampDays = new Set<string>();
+  for (const order of orders) {
+    const normalizedStatus = String(order.status ?? "").trim().toLowerCase();
+    if (!normalizedStatus || nonQualifyingStatuses.has(normalizedStatus)) {
+      continue;
+    }
+
+    // Loyalty should update as soon as payment/order is confirmed in the app flow.
+    if (Number(order.total ?? 0) <= 0) {
+      continue;
+    }
+
+    const hasEligibleCoffee = (order.items ?? []).some((item) => {
+      const { trimmed, base } = normalizeMenuLookupKey(String(item.name ?? ""));
+      return eligibleCoffeeNames.has(trimmed) || eligibleCoffeeNames.has(base);
+    });
+
+    if (!hasEligibleCoffee) {
+      continue;
+    }
+
+    const dayKey = new Intl.DateTimeFormat("en-CA", {
+      timeZone: LOYALTY_TIMEZONE,
+    }).format(new Date(order.placedAt));
+
+    stampDays.add(dayKey);
+  }
+
+  const totalCoffeeDays = stampDays.size;
+  const rewardsUnlocked = Math.floor(totalCoffeeDays / LOYALTY_STAMP_TARGET);
+  const stampsInCycle =
+    totalCoffeeDays > 0 && totalCoffeeDays % LOYALTY_STAMP_TARGET === 0
+      ? LOYALTY_STAMP_TARGET
+      : totalCoffeeDays % LOYALTY_STAMP_TARGET;
+  const daysRemaining =
+    stampsInCycle >= LOYALTY_STAMP_TARGET
+      ? 0
+      : LOYALTY_STAMP_TARGET - stampsInCycle;
+
+  return {
+    stampsInCycle,
+    stampTarget: LOYALTY_STAMP_TARGET,
+    totalCoffeeDays,
+    rewardsUnlocked,
+    daysRemaining,
+    freeCoffeeAvailable: daysRemaining === 0,
+  };
+};
 export const getCustomerOrderHistoryByCustomerEmail = async (input: {
   customerEmail: string;
   branchCode?: string;
@@ -2982,10 +3401,30 @@ export type AdminQrCodeRecord = {
   id: string;
   tableNumber: number;
   tableLabel: string;
+  qrType: "table" | "takeaway";
   createdAt: string;
 };
 
-const ensureTableForOutlet = async (outletId: string, tableNumber: number) => {
+const TAKEAWAY_TABLE_NUMBER_BASE = 9000;
+
+const buildQrTableParam = (tableNumber: number, tableLabel?: string | null) => {
+  const rawLabel = String(tableLabel ?? '').trim();
+  if (Number(tableNumber) >= TAKEAWAY_TABLE_NUMBER_BASE) {
+    return `Takeaway${Number(tableNumber) - TAKEAWAY_TABLE_NUMBER_BASE + 1}`;
+  }
+  if (isTakeawayLabel(rawLabel)) {
+    return rawLabel.replace(/\s+/g, '');
+  }
+  return `Table${tableNumber}`;
+};
+
+const buildQrTargetUrl = (tableNumber: number, tableLabel?: string | null) =>
+  `/sip/menu?table=${encodeURIComponent(buildQrTableParam(tableNumber, tableLabel))}`;
+
+const ensureTableForOutlet = async (
+  outletId: string,
+  tableNumber: number,
+) => {
   const supabase = assertSupabaseAdmin();
   let lookup = await supabase
     .from("restaurant_tables")
@@ -3001,21 +3440,71 @@ const ensureTableForOutlet = async (outletId: string, tableNumber: number) => {
     return lookup.data;
   }
 
-  const inserted = await supabase
-    .from("restaurant_tables")
-    .insert({
+  const candidatePayloads: Array<Record<string, unknown>> = [
+    {
+      outlet_id: outletId,
+      table_number: tableNumber,
+    },
+    {
       outlet_id: outletId,
       table_number: tableNumber,
       status: "available",
       seats: 4,
-    })
-    .select("id,table_number,table_label")
-    .single<{ id: string; table_number: number; table_label: string }>();
+    },
+  ];
 
-  if (inserted.error || !inserted.data) {
-    throw new Error(inserted.error?.message ?? "Unable to create table");
+  let lastInsertError: string | null = null;
+  for (const payload of candidatePayloads) {
+    const inserted = await supabase
+      .from("restaurant_tables")
+      .insert(payload)
+      .select("id,table_number,table_label")
+      .single<{ id: string; table_number: number; table_label: string }>();
+
+    if (!inserted.error && inserted.data) {
+      return inserted.data;
+    }
+
+    const message = inserted.error?.message ?? "Unable to create table";
+    if (message.toLowerCase().includes("duplicate key value")) {
+      const retryLookup = await supabase
+        .from("restaurant_tables")
+        .select("id,table_number,table_label")
+        .eq("outlet_id", outletId)
+        .eq("table_number", tableNumber)
+        .maybeSingle<{ id: string; table_number: number; table_label: string }>();
+      if (retryLookup.error) {
+        throw new Error(retryLookup.error.message);
+      }
+      if (retryLookup.data) {
+        return retryLookup.data;
+      }
+    }
+    lastInsertError = message;
   }
-  return inserted.data;
+
+  throw new Error(lastInsertError ?? "Unable to create table");
+};
+
+const ensureTakeawayTableForOutlet = async (outletId: string) => {
+  const supabase = assertSupabaseAdmin();
+  const { data: latestTakeawayRow, error: latestTakeawayError } = await supabase
+    .from("restaurant_tables")
+    .select("table_number")
+    .eq("outlet_id", outletId)
+    .gte("table_number", TAKEAWAY_TABLE_NUMBER_BASE)
+    .order("table_number", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ table_number: number }>();
+
+  if (latestTakeawayError) {
+    throw new Error(latestTakeawayError.message);
+  }
+
+  const nextTableNumber = latestTakeawayRow?.table_number
+    ? Number(latestTakeawayRow.table_number) + 1
+    : TAKEAWAY_TABLE_NUMBER_BASE;
+  return ensureTableForOutlet(outletId, nextTableNumber);
 };
 
 const tryInsertQrRow = async (payload: Record<string, unknown>) => {
@@ -3027,29 +3516,47 @@ const tryInsertQrRow = async (payload: Record<string, unknown>) => {
     .single<Record<string, unknown>>();
 };
 
-export const createAdminQrCode = async (
-  branchCode: string,
+const ensureQrRowForTable = async (
+  outletId: string,
+  tableId: string,
   tableNumber: number,
+  tableLabel?: string | null,
 ) => {
-  const outlet = await getOutletByBranchCode(branchCode);
-  const table = await ensureTableForOutlet(outlet.id, tableNumber);
-
   const supabase = assertSupabaseAdmin();
+  const targetUrl = buildQrTargetUrl(tableNumber, tableLabel);
+
   const existing = await supabase
     .from("table_qr_codes")
     .select("*")
-    .eq("outlet_id", outlet.id)
-    .eq("table_id", table.id)
+    .eq("outlet_id", outletId)
+    .eq("table_id", tableId)
     .limit(1)
     .maybeSingle<Record<string, unknown>>();
+
   if (!existing.error && existing.data) {
+    const existingId = String((existing.data as { id?: unknown }).id ?? "").trim();
+    if (existingId) {
+      const existingTarget = String((existing.data as { target_url?: unknown }).target_url ?? "").trim();
+      if (existingTarget !== targetUrl) {
+        const updated = await supabase
+          .from("table_qr_codes")
+          .update({ target_url: targetUrl })
+          .eq("id", existingId)
+          .select("*")
+          .single<Record<string, unknown>>();
+
+        if (!updated.error && updated.data) {
+          return updated.data;
+        }
+      }
+    }
+
     return existing.data;
   }
 
   const candidates: Array<Record<string, unknown>> = [
-    { outlet_id: outlet.id, table_id: table.id },
-    { outlet_id: outlet.id, table_id: table.id, is_active: true },
-    { outlet_id: outlet.id, table_id: table.id, qr_token: randomUUID() },
+    { outlet_id: outletId, table_id: tableId, target_url: targetUrl },
+    { outlet_id: outletId, table_id: tableId, target_url: targetUrl, is_active: true },
   ];
 
   let lastError: string | null = null;
@@ -3062,6 +3569,26 @@ export const createAdminQrCode = async (
   }
 
   throw new Error(lastError ?? "Unable to create QR code");
+};
+
+export const createAdminQrCode = async (
+  branchCode: string,
+  tableNumber: number,
+) => {
+  const outlet = await getOutletByBranchCode(branchCode);
+  const table = await ensureTableForOutlet(outlet.id, tableNumber);
+  return ensureQrRowForTable(outlet.id, table.id, Number(table.table_number), String(table.table_label));
+};
+
+export const createAdminTakeawayQrCode = async (branchCode: string) => {
+  const outlet = await getOutletByBranchCode(branchCode);
+  const table = await ensureTakeawayTableForOutlet(outlet.id);
+  await ensureQrRowForTable(outlet.id, table.id, Number(table.table_number), String(table.table_label));
+  return {
+    tableId: table.id,
+    tableNumber: Number(table.table_number),
+    tableLabel: getDisplayTableLabel(Number(table.table_number), String(table.table_label)),
+  };
 };
 
 export const deleteAdminQrCode = async (id: string) => {
@@ -3086,11 +3613,17 @@ export const getAdminQrCodes = async (
   if (tablesError) {
     throw new Error(tablesError.message);
   }
-  const tableLookup = new Map<string, { tableNumber: number; tableLabel: string }>();
+  const tableLookup = new Map<string, { tableNumber: number; tableLabel: string; qrType: "table" | "takeaway" }>();
   for (const row of tables ?? []) {
+    const tableLabel = getDisplayTableLabel(Number(row.table_number ?? 0), String(row.table_label ?? `Table${row.table_number}`));
+    const qrType: "table" | "takeaway" =
+      Number(row.table_number ?? 0) >= TAKEAWAY_TABLE_NUMBER_BASE || isTakeawayLabel(tableLabel)
+        ? "takeaway"
+        : "table";
     tableLookup.set(String(row.id), {
       tableNumber: Number(row.table_number ?? 0),
-      tableLabel: String(row.table_label ?? `Table${row.table_number}`),
+      tableLabel,
+      qrType,
     });
   }
 
@@ -3115,10 +3648,17 @@ export const getAdminQrCodes = async (
       const tableId = String(typedRow.table_id ?? "");
       const table = tableLookup.get(tableId);
       const tableNumber = Number(typedRow.table_number ?? table?.tableNumber ?? 0);
+      const tableLabel = table?.tableLabel ?? getDisplayTableLabel(tableNumber);
+      const qrType: "table" | "takeaway" =
+        table?.qrType ??
+        (tableNumber >= TAKEAWAY_TABLE_NUMBER_BASE || isTakeawayLabel(tableLabel)
+          ? "takeaway"
+          : "table");
       return {
         id: String(typedRow.id ?? ""),
         tableNumber,
-        tableLabel: table?.tableLabel ?? `Table${tableNumber}`,
+        tableLabel,
+        qrType,
         createdAt: String(
           typedRow.created_at ?? typedRow.updated_at ?? new Date().toISOString(),
         ),
@@ -3127,5 +3667,4 @@ export const getAdminQrCodes = async (
     .filter((row) => row.tableNumber > 0)
     .sort((a, b) => a.tableNumber - b.tableNumber);
 };
-
 

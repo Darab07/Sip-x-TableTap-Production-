@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -77,6 +78,7 @@ export default function RestaurantManagerMenuManagement({
   )
   const [priceInput, setPriceInput] = React.useState("")
   const [priceError, setPriceError] = React.useState("")
+  const [isLoading, setIsLoading] = React.useState(true)
 
   React.useEffect(() => {
     let cancelled = false
@@ -86,7 +88,7 @@ export default function RestaurantManagerMenuManagement({
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchManagerMenuItems("f7-islamabad")
+        const response = await fetchManagerMenuItems()
         if (!cancelled) {
           setItems(response.items)
         }
@@ -96,6 +98,9 @@ export default function RestaurantManagerMenuManagement({
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -302,7 +307,14 @@ export default function RestaurantManagerMenuManagement({
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {filteredItems.length === 0 ? (
+                  {isLoading ? (
+                    <div className="space-y-3">
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                    </div>
+                  ) : filteredItems.length === 0 ? (
                     <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
                       No menu items found for selected filters.
                     </div>
@@ -541,4 +553,7 @@ export default function RestaurantManagerMenuManagement({
     </SidebarProvider>
   )
 }
+
+
+
 

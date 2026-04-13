@@ -1,7 +1,7 @@
-﻿import webpush from "web-push";
+import webpush from "web-push";
 import { log } from "./app.js";
 
-type OrderStatus = "placed" | "confirmed" | "preparing" | "served";
+type OrderStatus = "placed" | "confirmed" | "preparing" | "ready" | "served";
 
 export interface PushSubscriptionPayload {
   endpoint: string;
@@ -33,7 +33,7 @@ interface PushNotificationPayload {
 
 const configuredPublicKey = process.env.VAPID_PUBLIC_KEY;
 const configuredPrivateKey = process.env.VAPID_PRIVATE_KEY;
-const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:tabletap@example.com";
+const vapidSubject = process.env.WEB_PUSH_SUBJECT || "mailto:noreply@tabletappk.com";
 
 const vapidKeys =
   configuredPublicKey && configuredPrivateKey
@@ -53,13 +53,17 @@ if (!configuredPublicKey || !configuredPrivateKey) {
 webpush.setVapidDetails(vapidSubject, vapidKeys.publicKey, vapidKeys.privateKey);
 
 const userSubscriptions = new Map<string, Map<string, PushSubscriptionPayload>>();
-const orderTimers = new Map<string, NodeJS.Timeout[]>();
+const orderWatchers = new Map<string, { userId: string; tableLabel: string }>();
 
-const ORDER_STATUS_FLOW: Array<{ status: OrderStatus; delayMs: number }> = [
-  { status: "confirmed", delayMs: 5_000 },
-  { status: "preparing", delayMs: 15_000 },
-  { status: "served", delayMs: 45_000 },
-];
+const normalizeOrderStatus = (status: string): OrderStatus | null => {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "placed") return "placed";
+  if (normalized === "confirmed" || normalized === "accepted") return "confirmed";
+  if (normalized === "preparing") return "preparing";
+  if (normalized === "ready") return "ready";
+  if (normalized === "served" || normalized === "completed") return "served";
+  return null;
+};
 
 const getStatusCopy = (status: OrderStatus, orderNumber: string, tableLabel: string) => {
   if (status === "placed") {
@@ -78,6 +82,12 @@ const getStatusCopy = (status: OrderStatus, orderNumber: string, tableLabel: str
     return {
       title: "Order preparing",
       body: `Order #${orderNumber} is now being prepared.`,
+    };
+  }
+  if (status === "ready") {
+    return {
+      title: "Order ready",
+      body: `Order #${orderNumber} is ready.`,
     };
   }
   return {
@@ -135,12 +145,13 @@ export const upsertPushSubscription = (userId: string, subscription: PushSubscri
 };
 
 export const removePushSubscription = (userId: string, endpoint: string) => {
-  const existing = userSubscriptions.get(userId);
+  const normalizedUserId = String(userId || "").trim();
+  const existing = userSubscriptions.get(normalizedUserId);
   if (!existing) return;
 
   existing.delete(endpoint);
   if (existing.size === 0) {
-    userSubscriptions.delete(userId);
+    userSubscriptions.delete(normalizedUserId);
   }
 };
 
@@ -150,7 +161,8 @@ export const pushOrderStatus = async (
   tableLabel: string,
   status: OrderStatus,
 ) => {
-  const existing = userSubscriptions.get(userId);
+  const normalizedUserId = String(userId || "").trim();
+  const existing = userSubscriptions.get(normalizedUserId);
   if (!existing || existing.size === 0) {
     return;
   }
@@ -164,7 +176,7 @@ export const pushOrderStatus = async (
         await sendPush(subscription, payload);
       } catch (error) {
         if (isGoneSubscriptionError(error)) {
-          removePushSubscription(userId, subscription.endpoint);
+          removePushSubscription(normalizedUserId, subscription.endpoint);
           return;
         }
         log(`Failed to send push: ${String(error)}`, "push");
@@ -174,23 +186,48 @@ export const pushOrderStatus = async (
 };
 
 export const cancelOrderPushTracking = (orderNumber: string) => {
-  const timers = orderTimers.get(orderNumber);
-  if (!timers) return;
-  timers.forEach((timerId) => clearTimeout(timerId));
-  orderTimers.delete(orderNumber);
+  orderWatchers.delete(orderNumber);
 };
 
 export const startOrderPushTracking = async ({ userId, orderNumber, tableLabel }: OrderPushInput) => {
-  cancelOrderPushTracking(orderNumber);
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedOrderNumber = String(orderNumber || "").trim();
+  if (!normalizedUserId || !normalizedOrderNumber) {
+    return;
+  }
 
-  await pushOrderStatus(userId, orderNumber, tableLabel, "placed");
+  orderWatchers.set(normalizedOrderNumber, {
+    userId: normalizedUserId,
+    tableLabel: String(tableLabel || "Table").trim() || "Table",
+  });
 
-  const timeoutIds = ORDER_STATUS_FLOW.map(({ status, delayMs }) =>
-    setTimeout(() => {
-      void pushOrderStatus(userId, orderNumber, tableLabel, status);
-    }, delayMs),
-  );
-
-  orderTimers.set(orderNumber, timeoutIds);
+  await pushOrderStatus(normalizedUserId, normalizedOrderNumber, tableLabel, "placed");
 };
 
+export const notifyTrackedOrderStatus = async (orderNumber: string, status: string) => {
+  const normalizedOrderNumber = String(orderNumber || "").trim();
+  if (!normalizedOrderNumber) {
+    return;
+  }
+
+  const watcher = orderWatchers.get(normalizedOrderNumber);
+  if (!watcher) {
+    return;
+  }
+
+  const normalizedStatus = normalizeOrderStatus(status);
+  if (!normalizedStatus) {
+    return;
+  }
+
+  await pushOrderStatus(
+    watcher.userId,
+    normalizedOrderNumber,
+    watcher.tableLabel,
+    normalizedStatus,
+  );
+
+  if (normalizedStatus === "served") {
+    orderWatchers.delete(normalizedOrderNumber);
+  }
+};

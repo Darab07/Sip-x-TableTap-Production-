@@ -1,3 +1,5 @@
+import { supabaseBrowser } from "./supabase";
+
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
   "/api";
@@ -28,6 +30,20 @@ const urlBase64ToUint8Array = (base64String: string) => {
   return outputArray;
 };
 
+const getAuthHeader = async () => {
+  if (!supabaseBrowser) {
+    throw new Error("Supabase auth is not configured.");
+  }
+
+  const { data } = await supabaseBrowser.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) {
+    throw new Error("Please log in again.");
+  }
+
+  return { Authorization: `Bearer ${token}` };
+};
+
 const getPushPublicKey = async () => {
   const res = await fetch(`${API_BASE}/push/public-key`);
   if (!res.ok) {
@@ -45,7 +61,7 @@ const registerServiceWorker = async () => {
   return navigator.serviceWorker.ready.then(() => registration);
 };
 
-export const ensurePushSubscription = async (userId: string) => {
+export const ensurePushSubscription = async () => {
   if (typeof window === "undefined") {
     return { subscribed: false, reason: "Push is only available in the browser." } satisfies PushSubscriptionResult;
   }
@@ -94,11 +110,11 @@ export const ensurePushSubscription = async (userId: string) => {
     });
   }
 
+  const authHeader = await getAuthHeader();
   const res = await fetch(`${API_BASE}/push/subscribe`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeader },
     body: JSON.stringify({
-      userId,
       subscription: subscription.toJSON(),
     }),
   });
@@ -111,13 +127,13 @@ export const ensurePushSubscription = async (userId: string) => {
 };
 
 export const startServerOrderPushTracking = async (input: {
-  userId: string;
   orderNumber: string;
   tableLabel: string;
 }) => {
+  const authHeader = await getAuthHeader();
   const res = await fetch(`${API_BASE}/orders/track/start`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeader },
     body: JSON.stringify(input),
   });
 

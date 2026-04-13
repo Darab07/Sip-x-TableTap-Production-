@@ -22,13 +22,12 @@ export default function Restaurant() {
 
   React.useEffect(() => {
     const existing = getRestaurantAuthenticatedSession();
-    if (existing?.highestRole) {
-      setLocation(getRoleRoute(existing.highestRole));
-      return;
-    }
-
     const authClient = supabaseBrowser;
+
     if (!authClient) {
+      if (existing?.highestRole) {
+        setLocation(getRoleRoute(existing.highestRole));
+      }
       return;
     }
 
@@ -37,7 +36,15 @@ export default function Restaurant() {
       const {
         data: { session },
       } = await authClient.auth.getSession();
-      if (!session || cancelled) {
+      if (cancelled) {
+        return;
+      }
+
+      if (!session) {
+        if (existing?.highestRole) {
+          clearRestaurantAuthentication();
+          setLoginError("Session expired. Please log in again.");
+        }
         return;
       }
 
@@ -66,6 +73,9 @@ export default function Restaurant() {
       } catch {
         await authClient.auth.signOut();
         clearRestaurantAuthentication();
+        if (!cancelled) {
+          setLoginError("Session expired. Please log in again.");
+        }
       }
     };
 

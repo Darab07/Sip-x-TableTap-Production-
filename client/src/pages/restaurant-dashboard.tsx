@@ -16,10 +16,11 @@ export default function RestaurantDashboard({
   dashboardRole,
 }: RestaurantDashboardProps) {
   const [rows, setRows] = React.useState<z.infer<typeof schema>[]>([]);
+  const [topItemsLoading, setTopItemsLoading] = React.useState(true);
 
   React.useEffect(() => {
     let mounted = true;
-    fetchOwnerTopItems("f7-islamabad", 30)
+    fetchOwnerTopItems(undefined, 30)
       .then((response) => {
         if (!mounted || !response.rows.length) return;
         setRows(
@@ -35,6 +36,11 @@ export default function RestaurantDashboard({
       })
       .catch((error) => {
         console.warn("Top-items sync failed:", error);
+      })
+      .finally(() => {
+        if (mounted) {
+          setTopItemsLoading(false);
+        }
       });
 
     return () => {
@@ -59,7 +65,7 @@ export default function RestaurantDashboard({
             <div className="flex flex-col gap-4 px-4 py-4 md:gap-6 md:px-6 md:py-6">
               <SectionCards />
               <ChartAreaInteractive />
-              <DataTable data={rows} />
+              <DataTable data={rows} isLoading={topItemsLoading} />
             </div>
           </div>
         </div>

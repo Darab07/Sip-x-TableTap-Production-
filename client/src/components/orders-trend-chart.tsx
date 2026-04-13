@@ -10,6 +10,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 type TrendMode = "day" | "hour"
@@ -24,6 +25,7 @@ const chartConfig = {
 export function OrdersTrendChart() {
   const isMobile = useIsMobile()
   const [mode, setMode] = React.useState<TrendMode>("day")
+  const [isLoading, setIsLoading] = React.useState(true)
   const [data, setData] = React.useState<Array<{ label: string; orders: number }>>([])
 
   React.useEffect(() => {
@@ -35,7 +37,7 @@ export function OrdersTrendChart() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerOrdersTrend(mode, "f7-islamabad", 7)
+        const response = await fetchOwnerOrdersTrend(mode, undefined, 7)
         if (!cancelled) {
           setData(response.points)
         }
@@ -46,6 +48,9 @@ export function OrdersTrendChart() {
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -100,43 +105,47 @@ export function OrdersTrendChart() {
         </div>
       </CardHeader>
       <CardContent>
-        <ChartContainer config={chartConfig} className="aspect-auto h-[300px] w-full">
-          <LineChart data={data} margin={{ left: 8, right: 8 }}>
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="label"
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-              minTickGap={isMobile ? 20 : 28}
-              interval={mode === "day" && isMobile ? 1 : 0}
-              tickFormatter={(value) => {
-                const text = String(value)
-                if (mode !== "day") return text
-                if (!isMobile) return text
-                const parts = text.split(" ")
-                return parts.length > 1 ? parts[1] : text
-              }}
-            />
-            <ChartTooltip
-              cursor={false}
-              content={
-                <ChartTooltipContent
-                  indicator="dot"
-                  formatter={(value) => `${value} orders`}
-                />
-              }
-            />
-            <Line
-              dataKey="orders"
-              type="monotone"
-              stroke="var(--color-orders, #0f766e)"
-              strokeWidth={2.5}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
-            />
-          </LineChart>
-        </ChartContainer>
+        {isLoading ? (
+          <Skeleton className="h-[300px] w-full rounded-xl" />
+        ) : (
+          <ChartContainer config={chartConfig} className="aspect-auto h-[300px] w-full">
+            <LineChart data={data} margin={{ left: 8, right: 8 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="label"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={isMobile ? 20 : 28}
+                interval={mode === "day" && isMobile ? 1 : 0}
+                tickFormatter={(value) => {
+                  const text = String(value)
+                  if (mode !== "day") return text
+                  if (!isMobile) return text
+                  const parts = text.split(" ")
+                  return parts.length > 1 ? parts[1] : text
+                }}
+              />
+              <ChartTooltip
+                cursor={false}
+                content={
+                  <ChartTooltipContent
+                    indicator="dot"
+                    formatter={(value) => `${value} orders`}
+                  />
+                }
+              />
+              <Line
+                dataKey="orders"
+                type="monotone"
+                stroke="var(--color-orders, #0f766e)"
+                strokeWidth={2.5}
+                dot={{ r: 3 }}
+                activeDot={{ r: 5 }}
+              />
+            </LineChart>
+          </ChartContainer>
+        )}
       </CardContent>
     </Card>
   )

@@ -9,9 +9,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import { fetchOwnerCards } from "@/lib/tabletap-supabase-api"
 
 export function SectionCards() {
+  const [isLoading, setIsLoading] = React.useState(true)
   const [cards, setCards] = React.useState({
     totalSales: 1250000,
     totalOrders: 1234,
@@ -34,6 +36,10 @@ export function SectionCards() {
       .catch((error) => {
         console.warn("Owner cards sync failed:", error)
       })
+      .finally(() => {
+        if (!mounted) return
+        setIsLoading(false)
+      })
 
     return () => {
       mounted = false
@@ -46,7 +52,11 @@ export function SectionCards() {
         <CardHeader className="relative pr-20">
           <CardDescription>Total sales</CardDescription>
           <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
-            Rs. {cards.totalSales.toLocaleString("en-PK")}
+            {isLoading ? (
+              <Skeleton className="h-9 w-40" />
+            ) : (
+              <>Rs. {cards.totalSales.toLocaleString("en-PK")}</>
+            )}
           </CardTitle>
           <div className="absolute right-4 top-4">
             <Badge
@@ -71,7 +81,11 @@ export function SectionCards() {
         <CardHeader className="relative pr-20">
           <CardDescription>Total orders</CardDescription>
           <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
-            {cards.totalOrders.toLocaleString("en-US")}
+            {isLoading ? (
+              <Skeleton className="h-9 w-28" />
+            ) : (
+              <>{cards.totalOrders.toLocaleString("en-US")}</>
+            )}
           </CardTitle>
           <div className="absolute right-4 top-4">
             <Badge
@@ -96,7 +110,11 @@ export function SectionCards() {
         <CardHeader className="relative pr-20">
           <CardDescription>Average order value</CardDescription>
           <CardTitle className="text-2xl sm:text-3xl font-semibold tabular-nums">
-            Rs. {Math.round(cards.averageOrderValue).toLocaleString("en-PK")}
+            {isLoading ? (
+              <Skeleton className="h-9 w-36" />
+            ) : (
+              <>Rs. {Math.round(cards.averageOrderValue).toLocaleString("en-PK")}</>
+            )}
           </CardTitle>
           <div className="absolute right-4 top-4">
             <Badge

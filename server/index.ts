@@ -22,7 +22,7 @@ const app = createApp();
     const message = normalizedError.message || "Internal Server Error";
 
     res.status(status).json({ message });
-    throw err;
+    log(`request failed with ${status}: ${message}`, "error");
   });
 
   if (app.get("env") === "development") {
@@ -40,8 +40,6 @@ const app = createApp();
     },
     () => {
       log(`serving on port ${port}`);
-      log(`Access the app at: http://192.168.18.42:${port}`);
-      log(`For mobile devices, use your computer's IP address`);
     },
   );
 })();

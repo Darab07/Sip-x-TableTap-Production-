@@ -48,7 +48,7 @@ export default function RestaurantTableManagement({
       if (typeof document !== "undefined" && document.hidden) return;
       inFlight = true;
       try {
-        const data = await fetchOwnerTableManagement("f7-islamabad");
+        const data = await fetchOwnerTableManagement();
         if (!cancelled) {
           setSnapshot(data);
         }

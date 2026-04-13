@@ -15,9 +15,11 @@ import {
   Menu as MenuIcon,
   Star,
   LogOut,
+  Coffee,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -32,9 +34,11 @@ import {
   checkInTableFromQrApi,
   callWaiterApi,
   fetchCustomerOrderHistory,
+  fetchCustomerLoyaltySummary,
   fetchOrderStatus,
   fetchMenuCatalog,
   fetchTablePublicAccess,
+  type CustomerLoyaltySummaryApi,
   type MenuCatalogApiResponse,
 } from "@/lib/tabletap-supabase-api";
 import { supabaseBrowser } from "@/lib/supabase";
@@ -55,6 +59,9 @@ const RESTAURANT = {
 };
 
 const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
+const LOYALTY_STAMP_TARGET = 10;
+const DEFAULT_BRANCH_CODE = String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
+const LOYALTY_CUP_STAMP_SRC = "/LoyaltyCupStamp.png";
 
 const getDefaultDisplayName = (id: string) => {
   const compact = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
@@ -608,6 +615,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
   const [isMenuAuthenticated, setIsMenuAuthenticated] = useState(false);
   const [showPastOrdersModal, setShowPastOrdersModal] = useState(false);
+  const [showLoyaltyCard, setShowLoyaltyCard] = useState(false);
+  const [loyaltySummary, setLoyaltySummary] =
+    useState<CustomerLoyaltySummaryApi | null>(null);
+  const [loyaltyLoading, setLoyaltyLoading] = useState(false);
   const [pastOrders, setPastOrders] = useState<StoredOrder[]>([]);
   const [pastOrdersLoading, setPastOrdersLoading] = useState(false);
   const [showSidebarMenu, setShowSidebarMenu] = useState(false);
@@ -652,12 +663,24 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const [tableAccess, setTableAccess] = useState<{
     tableNumber: number;
     tableLabel: string;
+    accessType: "table" | "takeaway";
     tableStatus: string;
     hasQrCode: boolean;
     orderingEnabled: boolean;
     message: string;
+    serviceStartTime: string;
+    serviceEndTime: string;
+    lastTakeawayTime: string;
+    timezone: string;
+    serviceHoursLabel: string;
+    lastTakeawayLabel: string;
   } | null>(null);
   const [showWaiterBanner, setShowWaiterBanner] = useState(false);
+  const isCatalogLoading = remoteCatalog === null;
+  const isTableAccessLoading = tableAccess === null;
+  const isTakeawayMenu =
+    tableAccess?.accessType === "takeaway" ||
+    tableIdentifier.trim().toLowerCase().startsWith("takeaway");
   const [waiterBannerProgress, setWaiterBannerProgress] = useState(100);
   const lastOrderRef = useRef<StoredOrder | null>(lastOrder);
   const waiterBannerIntervalRef = useRef<number | null>(null);
@@ -684,6 +707,13 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const currentTrackedOrder = trackableOrders[trackerPageIndex] ?? null;
   const hasTrackableOrders = trackableOrders.length > 0;
 
+  const totalCoffeeDays = loyaltySummary?.totalCoffeeDays ?? 0;
+  const loyaltyRewardsUnlocked = loyaltySummary?.rewardsUnlocked ?? 0;
+  const loyaltyCycleStamps = loyaltySummary?.stampsInCycle ?? 0;
+  const loyaltyStampTarget = loyaltySummary?.stampTarget ?? LOYALTY_STAMP_TARGET;
+  const loyaltyDaysRemaining = loyaltySummary?.daysRemaining ?? loyaltyStampTarget;
+  const loyaltyFreeCoffeeAvailable = loyaltySummary?.freeCoffeeAvailable ?? false;
+
   const openTrackerPanel = () => {
     if (!hasTrackableOrders) return;
     if (!trackableOrders[trackerPageIndex]) {
@@ -707,7 +737,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       storedOrder,
     ).slice(0, 30);
     setLastOrder(storedOrder);
-    setShowOrderTracker(Boolean(storedOrder));
+    setShowOrderTracker(storedTrackedOrders.length > 0);
     setTrackedOrders(storedTrackedOrders);
     setTrackerPageIndex(0);
   }, [tableNumber, trackerStorageScope]);
@@ -935,10 +965,17 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         setTableAccess({
           tableNumber: tableNumberNumeric,
           tableLabel: `Table${tableNumberNumeric}`,
+          accessType: "table",
           tableStatus: "unknown",
           hasQrCode: false,
           orderingEnabled: false,
           message: `Unable to verify table access: ${reason}`,
+          serviceStartTime: "08:00",
+          serviceEndTime: "01:00",
+          lastTakeawayTime: "00:30",
+          timezone: "Asia/Karachi",
+          serviceHoursLabel: RESTAURANT.hours,
+          lastTakeawayLabel: "12:30 AM",
         });
       } finally {
         inFlight = false;
@@ -2298,7 +2335,7 @@ useEffect(() => {
   };
 
   useEffect(() => {
-    if (showItemModal || showCart || showSidebarMenu || showAuthDrawer || showAccountDrawer) {
+    if (showItemModal || showCart || showSidebarMenu || showAuthDrawer || showAccountDrawer || (tableAccess && !tableAccess.orderingEnabled && tableAccess.message.toLowerCase().includes("restaurant is currently closed"))) {
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = '';
@@ -2306,7 +2343,7 @@ useEffect(() => {
     return () => {
       document.body.style.overflow = '';
     };
-  }, [showItemModal, showCart, showSidebarMenu, showAuthDrawer, showAccountDrawer]);
+  }, [showItemModal, showCart, showSidebarMenu, showAuthDrawer, showAccountDrawer, tableAccess]);
 
   useEffect(() => {
     if (!showAccountDrawer) return;
@@ -2390,7 +2427,7 @@ useEffect(() => {
       const response = await fetchCustomerOrderHistory({
         authUserId: normalizedAuthUserId || undefined,
         customerEmail: normalizedEmail || undefined,
-        branchCode: "f7-islamabad",
+        branchCode: DEFAULT_BRANCH_CODE,
         limit: 1000,
       });
 
@@ -2464,21 +2501,52 @@ useEffect(() => {
       console.warn("Past orders sync failed:", error);
     } finally {
       setPastOrdersLoading(false);
+    }  };
+
+  const loadLoyaltySummaryFromServer = async () => {
+    const normalizedAuthUserId = accountAuthUserId.trim();
+    const normalizedEmail = accountEmail.trim().toLowerCase();
+    const hasAccountIdentity =
+      isMenuAuthenticated &&
+      (Boolean(normalizedAuthUserId) || Boolean(normalizedEmail));
+
+    if (!hasAccountIdentity) {
+      setLoyaltySummary(null);
+      return;
+    }
+
+    try {
+      setLoyaltyLoading(true);
+      const response = await fetchCustomerLoyaltySummary({
+        branchCode: DEFAULT_BRANCH_CODE,
+      });
+      setLoyaltySummary(response.summary);
+    } catch (error) {
+      console.warn("Loyalty summary sync failed:", error);
+    } finally {
+      setLoyaltyLoading(false);
     }
   };
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadPastOrdersFromServer();
+      void loadLoyaltySummaryFromServer();
     }, 1200);
 
     return () => window.clearTimeout(timer);
   }, [accountAuthUserId, accountEmail, isMenuAuthenticated]);
 
-  useEffect(() => {
+    useEffect(() => {
     if (!showPastOrdersModal) return;
     void loadPastOrdersFromServer();
   }, [showPastOrdersModal, accountAuthUserId, accountEmail, isMenuAuthenticated]);
+
+  useEffect(() => {
+    if (!showLoyaltyCard) return;
+    void loadLoyaltySummaryFromServer();
+  }, [showLoyaltyCard, accountAuthUserId, accountEmail, isMenuAuthenticated]);
+
   useEffect(() => {
     if (!pendingCartOpenAfterProfile || !isMenuAuthenticated) {
       return;
@@ -3615,6 +3683,11 @@ useEffect(() => {
       </DropdownMenu>
     );
   };
+  const showRestaurantClosedOverlay = Boolean(
+    tableAccess &&
+      !tableAccess.orderingEnabled &&
+      tableAccess.message.toLowerCase().includes("restaurant is currently closed"),
+  );
   return (
     <motion.div
       initial={{ opacity: 0, x: 100 }}
@@ -3650,7 +3723,38 @@ useEffect(() => {
             </Card>
           </motion.div>
         ) : null}
+            </AnimatePresence>
+
+<AnimatePresence>
+        {showRestaurantClosedOverlay ? (
+          <>
+            <motion.div
+              className="fixed inset-0 z-[84] bg-black/65"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            />
+            <motion.div
+              className="fixed inset-0 z-[85] flex items-center justify-center p-4"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="w-full max-w-md rounded-2xl bg-white px-5 py-6 text-black shadow-2xl">
+                <p className="text-lg font-semibold heading-font">We're currently closed</p>
+                <p className="mt-2 text-sm text-black/80 subtext-font">
+                  This restaurant is not accepting orders right now. Please come back during operating hours.
+                </p>
+                <p className="mt-3 text-sm font-semibold text-black heading-font">
+                  Timings: {tableAccess?.serviceHoursLabel ?? RESTAURANT.hours}
+                </p>
+              </div>
+            </motion.div>
+          </>
+        ) : null}
       </AnimatePresence>
+
 
       <AnimatePresence>
         {showFirstVisitPromo && (
@@ -3738,7 +3842,7 @@ useEffect(() => {
             </motion.div>
           </>
         )}
-      </AnimatePresence>
+            </AnimatePresence>
 
       <AnimatePresence>
         {showSidebarMenu && (
@@ -3997,7 +4101,7 @@ useEffect(() => {
             </motion.div>
           </>
         )}
-      </AnimatePresence>
+            </AnimatePresence>
 
       <AnimatePresence>
         {showAuthDrawer && (
@@ -4371,6 +4475,20 @@ useEffect(() => {
           />
                   </div>
         <div className="flex items-center gap-2">
+          {isMenuAuthenticated ? (
+            <button
+              type="button"
+              onClick={() => {
+                setShowLoyaltyCard(true);
+                void loadLoyaltySummaryFromServer();
+              }}
+              className="rounded-full border border-gray-200 bg-white p-0.5 text-gray-700 transition-colors hover:bg-gray-50"
+              aria-label="Open loyalty card"
+              title="Loyalty card"
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-full"><Coffee size={20} /></span>
+            </button>
+          ) : null}
           {renderAuthControls(false)}
         </div>
       </div>
@@ -4431,6 +4549,20 @@ useEffect(() => {
               <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
             </div>
             <div className="flex items-center gap-2">
+              {isMenuAuthenticated ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowLoyaltyCard(true);
+                    void loadLoyaltySummaryFromServer();
+                  }}
+                  className="rounded-full border border-gray-200 bg-white p-0.5 text-gray-700 transition-colors hover:bg-gray-50"
+                  aria-label="Open loyalty card"
+                  title="Loyalty card"
+                >
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full"><Coffee size={16} /></span>
+                </button>
+              ) : null}
               {renderAuthControls(true)}
             </div>
           </div>
@@ -4623,15 +4755,24 @@ useEffect(() => {
             <span className="text-gray-300">{"\u00B7"}</span>
             <div className="flex items-center gap-1">
               <Clock size={16} className="text-gray-500" />
-              <span>House service: {RESTAURANT.hours}</span>
+              <span>House service: {tableAccess?.serviceHoursLabel ?? RESTAURANT.hours}</span>
             </div>
+            {isTakeawayMenu ? (
+              <>
+                <span className="text-gray-300">{"\u00B7"}</span>
+                <div className="flex items-center gap-1">
+                  <Clock size={16} className="text-gray-500" />
+                  <span>Last takeaway: {tableAccess?.lastTakeawayLabel ?? "12:30 AM"}</span>
+                </div>
+              </>
+            ) : null}
           </div>
 
           <div className="mt-6 text-sm subtext-font text-gray-700">
             <div className="grid grid-cols-2 border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm divide-x divide-gray-200">
               <div className="flex flex-col items-center justify-center py-4">
-                <p className="text-base font-semibold text-gray-900 heading-font">#{tableNumber}</p>
-                <p className="text-xs text-gray-500 mt-1">Current table</p>
+                <p className="text-base font-semibold text-gray-900 heading-font">{isTableAccessLoading ? "--" : isTakeawayMenu ? "Counter" : `#${tableNumber}`}</p>
+                <p className="text-xs text-gray-500 mt-1">{isTakeawayMenu ? "Pick up" : "Current table"}</p>
               </div>
               <div className="flex flex-col items-center justify-center py-4">
                 <div className="flex items-center gap-2">
@@ -4641,7 +4782,7 @@ useEffect(() => {
                 <p className="text-xs text-gray-500 mt-1">Average service time</p>
               </div>
             </div>
-            {tableAccess && !tableAccess.orderingEnabled ? (
+            {tableAccess && !tableAccess.orderingEnabled && !showRestaurantClosedOverlay ? (
               <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {tableAccess.message}
               </div>
@@ -4672,6 +4813,20 @@ useEffect(() => {
 
       {/* All Sections on One Page */}
       <div className="px-4 pb-6">
+        {isCatalogLoading ? (
+          <div className="space-y-8 py-6">
+            {tabs.map((tab) => (
+              <div key={`skeleton-${tab}`}>
+                <Skeleton className="mb-4 h-6 w-40" />
+                <div className="flex space-x-4 overflow-x-auto pb-1">
+                  {[1, 2, 3, 4].map((index) => (
+                    <Skeleton key={`${tab}-${index}`} className="h-36 w-56 flex-shrink-0 rounded-lg" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {/* Breakfast Section */}
          <div ref={breakfastRef} className="py-6">
            <h2 className="text-xl font-extrabold tracking-tight mb-4">BREAKFAST AT SIP.</h2>
@@ -5197,7 +5352,7 @@ useEffect(() => {
             <div className="px-5 space-y-4 overflow-y-auto flex-1">
               <div>
                 <p className="text-2xl font-bold heading-font">{RESTAURANT.name}</p>
-                <p className="text-lg text-gray-600 subtext-font">Table {tableNumber}</p>
+                <p className="text-lg text-gray-600 subtext-font">{isTakeawayMenu ? "Pick up from counter" : `Table ${tableNumber}`}</p>
               </div>
 
               <div className="space-y-4">
@@ -5440,7 +5595,116 @@ useEffect(() => {
           </motion.div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {showLoyaltyCard && isMenuAuthenticated ? (
+          <>
+            <motion.div
+              className="fixed inset-0 z-50 bg-black/40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowLoyaltyCard(false)}
+            />
+            <motion.div
+              className="fixed inset-x-0 bottom-0 z-[60] mx-auto w-full max-w-md rounded-t-[32px] bg-white p-5 shadow-2xl"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", stiffness: 260, damping: 28 }}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xl font-semibold text-gray-900 heading-font">Loyalty card</p>
+                  <p className="mt-1 text-sm text-gray-500 subtext-font">
+                    10 coffee days unlock 1 free eligible coffee.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowLoyaltyCard(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100"
+                  aria-label="Close loyalty card"
+                >
+                  <X size={18} />
+                </button>
+              </div>
 
+              <div
+                className="mt-4 rounded-[28px] p-4"
+                style={{
+                  backgroundColor: "#95c6b5",
+                  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 100%)",
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] uppercase tracking-[0.22em] text-white/85 subtext-font">
+                    Sip Loyalty Card
+                  </p>
+                  <p className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-semibold text-white heading-font">
+                    {loyaltyCycleStamps}/{loyaltyStampTarget}
+                  </p>
+                </div>
+                <div className="mt-4 grid grid-cols-5 gap-2.5">
+                  {Array.from({ length: loyaltyStampTarget }).map((_, index) => {
+                    const isFilled = index < loyaltyCycleStamps;
+                    const isFreeSlot = index === loyaltyStampTarget - 1;
+                    return (
+                      <div
+                        key={`loyalty-stamp-${index}`}
+                        className="flex items-center justify-center"
+                      >
+                        <div className="w-full max-w-16 aspect-square rounded-full bg-white/95 flex shrink-0 items-center justify-center overflow-hidden">
+                          {isFilled ? (
+                            <img src={LOYALTY_CUP_STAMP_SRC} alt="Cup stamp" className="h-[120%] w-[120%] object-contain" />
+                          ) : isFreeSlot ? (
+                            <span className="text-[10px] leading-[1.05] text-center text-[#b77d7d] font-semibold heading-font">
+                              free
+                              <br />
+                              coffee
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2 rounded-2xl bg-gray-50 p-4">
+                <p className="text-sm font-semibold text-gray-900 heading-font">
+                  Coffee days collected: {totalCoffeeDays}
+                </p>
+                <p className="text-sm text-gray-600 subtext-font">
+                  {loyaltyDaysRemaining === 0
+                    ? "Free eligible coffee unlocked on your next order."
+                    : `${loyaltyDaysRemaining} more coffee day${loyaltyDaysRemaining === 1 ? "" : "s"} until free coffee.`}
+                </p>
+                {loyaltyRewardsUnlocked > 0 ? (
+                  <p className="text-xs text-gray-500 subtext-font">
+                    Rewards unlocked so far: {loyaltyRewardsUnlocked}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-4">
+                <p className="text-sm font-semibold text-gray-900 heading-font">
+                  Eligibility rules
+                </p>
+                <ul className="mt-2 space-y-1.5 text-xs text-gray-600 subtext-font">
+                  <li>1 stamp maximum per calendar day.</li>
+                  <li>Stamps are awarded only on paid orders with at least 1 eligible coffee item.</li>
+                  <li>Multiple qualifying orders on the same day still count as 1 stamp.</li>
+                  <li>Cancelled, failed, and refunded orders do not earn stamps.</li>
+                  <li>Free coffee redemptions do not earn a new stamp.</li>
+                  <li>Loyalty progress is linked to your account, not the table QR session.</li>
+                </ul>
+              </div>
+            </motion.div>
+          </>
+        ) : null}
+      </AnimatePresence>
       <AnimatePresence>
         {showPastOrdersModal && (
           <>
@@ -5664,7 +5928,7 @@ useEffect(() => {
                     <ChevronLeft size={20} />
                   </button>
                   <div className="text-right">
-                    <p className="text-xs uppercase tracking-widest text-white/70">Table {tableNumber}</p>
+                    <p className="text-xs uppercase tracking-widest text-white/70">{isTakeawayMenu ? "Takeaway" : `Table ${tableNumber}`}</p>
                     <p className="text-lg font-semibold">SIP Checkout</p>
                   </div>
                 </div>
@@ -5904,6 +6168,34 @@ useEffect(() => {
     </motion.div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

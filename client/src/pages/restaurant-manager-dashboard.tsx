@@ -4,6 +4,7 @@ import { ManagerWaiterAlertOverlay } from "@/components/manager-waiter-alert-ove
 import { SiteHeader } from "@/components/site-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -82,6 +83,7 @@ export default function RestaurantManagerDashboard({
   const [location] = useLocation();
   const [orders, setOrders] = React.useState<LiveOrder[]>([]);
   const [isSyncingOrders, setIsSyncingOrders] = React.useState(false);
+  const [isInitialLoading, setIsInitialLoading] = React.useState(true);
   const [statusUpdateError, setStatusUpdateError] = React.useState<string | null>(
     null
   );
@@ -158,6 +160,7 @@ export default function RestaurantManagerDashboard({
       console.warn("Live orders sync failed.", error);
     } finally {
       setIsSyncingOrders(false);
+      setIsInitialLoading(false);
     }
   }, [clearedReadyOrderIds]);
 
@@ -370,7 +373,12 @@ export default function RestaurantManagerDashboard({
                           </Badge>
                         </div>
                       </div>
-                      {columnOrders.length === 0 ? (
+                      {isInitialLoading ? (
+                        <div className="space-y-2">
+                          <Skeleton className="h-28 w-full rounded-lg" />
+                          <Skeleton className="h-28 w-full rounded-lg" />
+                        </div>
+                      ) : columnOrders.length === 0 ? (
                         <div className="rounded-lg border border-dashed bg-muted/20 p-5 text-center text-sm text-muted-foreground">
                           No orders in this lane.
                         </div>
@@ -496,6 +504,12 @@ export default function RestaurantManagerDashboard({
     </SidebarProvider>
   );
 }
+
+
+
+
+
+
 
 
 

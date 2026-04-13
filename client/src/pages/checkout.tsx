@@ -208,25 +208,28 @@ export default function Checkout() {
     let orderData: StoredOrder;
     setIsPlacingOrder(true);
     try {
-      const placed = await placeOrder({
-        tableNumber,
-        deviceFingerprint,
-        customerName: customerName || undefined,
-        customerEmail: customerEmail || undefined,
-        notes,
-        subtotal,
-        total,
-        tipAmount,
-        serviceFee,
-        gstAmount,
-        items: cartItems.map((item) => ({
-          menuItemId: item.menuItemId,
-          name: item.name,
-          quantity: item.quantity,
-          unitPrice: item.price,
-          details: item.details,
-        })),
-      });
+      const placed = await placeOrder(
+        {
+          tableNumber,
+          deviceFingerprint,
+          customerName: customerName || undefined,
+          customerEmail: customerEmail || undefined,
+          notes,
+          subtotal,
+          total,
+          tipAmount,
+          serviceFee,
+          gstAmount,
+          items: cartItems.map((item) => ({
+            menuItemId: item.menuItemId,
+            name: item.name,
+            quantity: item.quantity,
+            unitPrice: item.price,
+            details: item.details,
+          })),
+        },
+        { accessToken: session.access_token },
+      );
 
       orderData = {
         orderNumber: placed.order.orderNumber,
@@ -296,10 +299,9 @@ export default function Checkout() {
     window.dispatchEvent(event);
 
     try {
-      const pushResult = await ensurePushSubscription(userId);
+      const pushResult = await ensurePushSubscription();
       if (pushResult.subscribed) {
         await startServerOrderPushTracking({
-          userId,
           orderNumber: orderData.orderNumber,
           tableLabel: orderData.tableLabel,
         });
@@ -645,6 +647,9 @@ export default function Checkout() {
     </motion.div>
   );
 }
+
+
+
 
 
 

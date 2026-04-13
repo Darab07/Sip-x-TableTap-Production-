@@ -4,8 +4,20 @@ const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
   "/api";
 
-const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-  const headers = new Headers(init?.headers ?? undefined);
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
+
+type ApiFetchInit = RequestInit & {
+  authToken?: string;
+};
+
+const apiFetch = async (input: RequestInfo | URL, init?: ApiFetchInit) => {
+  const { authToken, ...requestInit } = init ?? {};
+  const headers = new Headers(requestInit.headers ?? undefined);
+
+  if (authToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
 
   if (!headers.has("Authorization") && supabaseBrowser) {
     const { data } = await supabaseBrowser.auth.getSession();
@@ -17,7 +29,7 @@ const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 
   return fetch(input, {
     cache: "no-store",
-    ...init,
+    ...requestInit,
     headers,
   });
 };
@@ -93,7 +105,7 @@ export type MenuCatalogApiResponse = {
   }>;
 };
 
-export const fetchMenuCatalog = async (branchCode = "f7-islamabad") => {
+export const fetchMenuCatalog = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const cacheBust = Date.now();
   const res = await apiFetch(
     `${API_BASE}/menu/catalog?branchCode=${encodeURIComponent(branchCode)}&ts=${cacheBust}`,
@@ -103,7 +115,7 @@ export const fetchMenuCatalog = async (branchCode = "f7-islamabad") => {
 
 export const fetchTablePublicAccess = async (
   tableNumber: number,
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const res = await apiFetch(
     `${API_BASE}/tables/public-access?branchCode=${encodeURIComponent(
@@ -113,16 +125,23 @@ export const fetchTablePublicAccess = async (
   return readJson<{
     tableNumber: number;
     tableLabel: string;
+    accessType: "table" | "takeaway";
     tableStatus: string;
     hasQrCode: boolean;
     orderingEnabled: boolean;
     message: string;
+    serviceStartTime: string;
+    serviceEndTime: string;
+    lastTakeawayTime: string;
+    timezone: string;
+    serviceHoursLabel: string;
+    lastTakeawayLabel: string;
   }>(res);
 };
 
 export const checkInTableFromQrApi = async (
   tableNumber: number,
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const res = await apiFetch(`${API_BASE}/tables/check-in`, {
     method: "POST",
@@ -156,7 +175,7 @@ export const callWaiterApi = async (input: {
     body: JSON.stringify({
       tableNumber: input.tableNumber,
       tableLabel: input.tableLabel,
-      branchCode: input.branchCode ?? "f7-islamabad",
+      branchCode: input.branchCode ?? DEFAULT_BRANCH_CODE,
     }),
   });
   return readJson<{ event: WaiterCallEventApi }>(res);
@@ -164,7 +183,7 @@ export const callWaiterApi = async (input: {
 
 export const fetchManagerWaiterCallsApi = async (
   since = 0,
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const params = new URLSearchParams({
     since: String(since),
@@ -222,11 +241,15 @@ export type PlacedOrderApiResponse = {
   };
 };
 
-export const placeOrder = async (payload: PlaceOrderPayload) => {
+export const placeOrder = async (
+  payload: PlaceOrderPayload,
+  options?: { accessToken?: string },
+) => {
   const res = await apiFetch(`${API_BASE}/orders/place`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    authToken: options?.accessToken,
   });
   return readJson<PlacedOrderApiResponse>(res);
 };
@@ -258,7 +281,7 @@ export const fetchCustomerOrderHistory = async (input: {
   limit?: number;
 }) => {
   const params = new URLSearchParams({
-    branchCode: input.branchCode ?? "f7-islamabad",
+    branchCode: input.branchCode ?? DEFAULT_BRANCH_CODE,
     limit: String(input.limit ?? 200),
   });
 
@@ -276,6 +299,25 @@ export const fetchCustomerOrderHistory = async (input: {
 
   const res = await apiFetch(`${API_BASE}/orders/history?${params.toString()}`);
   return readJson<{ orders: CustomerOrderHistoryApiItem[] }>(res);
+};
+export type CustomerLoyaltySummaryApi = {
+  stampsInCycle: number;
+  stampTarget: number;
+  totalCoffeeDays: number;
+  rewardsUnlocked: number;
+  daysRemaining: number;
+  freeCoffeeAvailable: boolean;
+};
+
+export const fetchCustomerLoyaltySummary = async (input?: {
+  branchCode?: string;
+}) => {
+  const params = new URLSearchParams({
+    branchCode: input?.branchCode ?? DEFAULT_BRANCH_CODE,
+  });
+
+  const res = await apiFetch(`${API_BASE}/orders/loyalty-summary?${params.toString()}`);
+  return readJson<{ summary: CustomerLoyaltySummaryApi }>(res);
 };
 
 export const upsertCustomerProfile = async (input: {
@@ -310,7 +352,44 @@ export type ManagerLiveOrder = {
   status: "new" | "accepted" | "preparing" | "ready";
 };
 
-export const fetchManagerLiveOrders = async (branchCode = "f7-islamabad") => {
+export type OutletOrderingSettingsApi = {
+  branchCode: string;
+  serviceStartTime: string;
+  serviceEndTime: string;
+  lastTakeawayTime: string;
+  timezone: string;
+  serviceHoursLabel: string;
+  lastTakeawayLabel: string;
+};
+
+export const fetchOutletOrderingSettings = async (branchCode = DEFAULT_BRANCH_CODE) => {
+  const res = await apiFetch(
+    `${API_BASE}/manager/outlet-ordering-settings?branchCode=${encodeURIComponent(branchCode)}`,
+  );
+  return readJson<{ settings: OutletOrderingSettingsApi }>(res);
+};
+
+export const updateOutletOrderingSettingsApi = async (input: {
+  serviceStartTime: string;
+  serviceEndTime: string;
+  lastTakeawayTime: string;
+  branchCode?: string;
+  timezone?: string;
+}) => {
+  const res = await apiFetch(`${API_BASE}/manager/outlet-ordering-settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      branchCode: input.branchCode ?? DEFAULT_BRANCH_CODE,
+      serviceStartTime: input.serviceStartTime,
+      serviceEndTime: input.serviceEndTime,
+      lastTakeawayTime: input.lastTakeawayTime,
+      timezone: input.timezone,
+    }),
+  });
+  return readJson<{ settings: OutletOrderingSettingsApi }>(res);
+};
+export const fetchManagerLiveOrders = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/manager/live-orders?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -320,7 +399,7 @@ export const fetchManagerLiveOrders = async (branchCode = "f7-islamabad") => {
 export const updateManagerOrderStatus = async (
   orderNumber: string,
   status: "accepted" | "preparing" | "ready",
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const res = await apiFetch(
     `${API_BASE}/manager/orders/${encodeURIComponent(orderNumber)}/status`,
@@ -335,7 +414,7 @@ export const updateManagerOrderStatus = async (
   }>(res);
 };
 
-export const fetchOwnerCards = async (branchCode = "f7-islamabad") => {
+export const fetchOwnerCards = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/dashboard/owner/cards?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -374,7 +453,7 @@ export const fetchAdminEarnings = async () => {
 };
 
 export const fetchOwnerSalesTrend = async (
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
   rangeDays = 30,
 ) => {
   const res = await apiFetch(
@@ -386,7 +465,7 @@ export const fetchOwnerSalesTrend = async (
 };
 
 export const fetchOwnerTopItems = async (
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
   rangeDays = 30,
 ) => {
   const res = await apiFetch(
@@ -405,7 +484,7 @@ export const fetchOwnerTopItems = async (
   }>(res);
 };
 
-export const fetchOwnerOrdersSummary = async (branchCode = "f7-islamabad") => {
+export const fetchOwnerOrdersSummary = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/dashboard/owner/orders/summary?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -424,7 +503,7 @@ export const fetchOwnerOrdersSummary = async (branchCode = "f7-islamabad") => {
 
 export const fetchOwnerOrdersTrend = async (
   mode: "day" | "hour",
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
   rangeDays = 7,
 ) => {
   const query = new URLSearchParams({
@@ -439,7 +518,7 @@ export const fetchOwnerOrdersTrend = async (
 };
 
 export const fetchOwnerOrdersTable = async (
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
   rangeDays = 31,
 ) => {
   const res = await apiFetch(
@@ -493,7 +572,7 @@ export const fetchOutlets = async () => {
   }>(res);
 };
 
-export const fetchOwnerTableManagement = async (branchCode = "f7-islamabad") => {
+export const fetchOwnerTableManagement = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/dashboard/owner/table-management?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -523,7 +602,7 @@ export const fetchOwnerTableManagement = async (branchCode = "f7-islamabad") => 
 };
 
 export const fetchOwnerMenuInsights = async (
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
   dateRange: "today" | "this-week" | "this-month" = "today",
   category = "all",
 ) => {
@@ -547,7 +626,7 @@ export const fetchOwnerMenuInsights = async (
   }>(res);
 };
 
-export const fetchManagerMenuItems = async (branchCode = "f7-islamabad") => {
+export const fetchManagerMenuItems = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/manager/menu-items?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -577,7 +656,7 @@ export const updateManagerMenuItemApi = async (input: {
       body: JSON.stringify({
         price: input.price,
         available: input.available,
-        branchCode: input.branchCode ?? "f7-islamabad",
+        branchCode: input.branchCode ?? DEFAULT_BRANCH_CODE,
       }),
     },
   );
@@ -591,7 +670,7 @@ export const updateManagerMenuItemApi = async (input: {
   }>(res);
 };
 
-export const fetchManagerTableManagement = async (branchCode = "f7-islamabad") => {
+export const fetchManagerTableManagement = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/manager/table-management?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -623,7 +702,7 @@ export const fetchManagerTableManagement = async (branchCode = "f7-islamabad") =
 export const updateManagerTableAvailabilityApi = async (
   tableId: string,
   availability: "available" | "unavailable",
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const res = await apiFetch(
     `${API_BASE}/manager/tables/${encodeURIComponent(tableId)}/availability`,
@@ -636,7 +715,7 @@ export const updateManagerTableAvailabilityApi = async (
   return readJson<{ table: { id: string; status: string } }>(res);
 };
 
-export const fetchAdminQrCodes = async (branchCode = "f7-islamabad") => {
+export const fetchAdminQrCodes = async (branchCode = DEFAULT_BRANCH_CODE) => {
   const res = await apiFetch(
     `${API_BASE}/admin/qr-codes?branchCode=${encodeURIComponent(branchCode)}`,
   );
@@ -645,6 +724,7 @@ export const fetchAdminQrCodes = async (branchCode = "f7-islamabad") => {
       id: string;
       tableNumber: number;
       tableLabel: string;
+      qrType: "table" | "takeaway";
       createdAt: string;
     }>;
   }>(res);
@@ -652,7 +732,7 @@ export const fetchAdminQrCodes = async (branchCode = "f7-islamabad") => {
 
 export const createAdminQrCodeApi = async (
   tableNumber: number,
-  branchCode = "f7-islamabad",
+  branchCode = DEFAULT_BRANCH_CODE,
 ) => {
   const res = await apiFetch(`${API_BASE}/admin/qr-codes`, {
     method: "POST",
@@ -664,11 +744,36 @@ export const createAdminQrCodeApi = async (
       id: string;
       tableNumber: number;
       tableLabel: string;
+      qrType: "table" | "takeaway";
       createdAt: string;
     }>;
   }>(res);
 };
-
+export const createAdminTakeawayQrCodeApi = async (
+  branchCode = DEFAULT_BRANCH_CODE,
+) => {
+  const res = await apiFetch(`${API_BASE}/admin/qr-codes/takeaway`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ branchCode }),
+  });
+  return readJson<{
+    rows: Array<{
+      id: string;
+      tableNumber: number;
+      tableLabel: string;
+      qrType: "table" | "takeaway";
+      createdAt: string;
+    }>;
+    created: {
+      id: string;
+      tableNumber: number;
+      tableLabel: string;
+      qrType: "table" | "takeaway";
+      createdAt: string;
+    } | null;
+  }>(res);
+};
 export const deleteAdminQrCodeApi = async (id: string) => {
   const res = await apiFetch(`${API_BASE}/admin/qr-codes/${encodeURIComponent(id)}`, {
     method: "DELETE",
@@ -696,5 +801,6 @@ export const fetchStaffSession = async () => {
     }>;
   }>(res);
 };
+
 
 

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import { fetchOwnerOrdersSummary } from "@/lib/tabletap-supabase-api"
 
 const formatSignedPercent = (value: number) => {
@@ -9,6 +10,7 @@ const formatSignedPercent = (value: number) => {
 }
 
 export function OrdersCards() {
+  const [isLoading, setIsLoading] = React.useState(true)
   const [summary, setSummary] = React.useState<{
     totalOrdersToday: number
     totalOrdersDeltaPercent: number
@@ -29,7 +31,7 @@ export function OrdersCards() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const data = await fetchOwnerOrdersSummary("f7-islamabad")
+        const data = await fetchOwnerOrdersSummary()
         if (!cancelled) {
           setSummary(data)
         }
@@ -39,6 +41,9 @@ export function OrdersCards() {
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -77,14 +82,14 @@ export function OrdersCards() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Total Orders (Today)</p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              {totalOrders}
+              {isLoading ? <Skeleton className="h-9 w-20" /> : totalOrders}
             </CardTitle>
             <div className="absolute right-4 top-4">
               <Badge
                 variant="outline"
                 className="rounded-lg border-green-200 bg-green-50 text-xs text-green-700"
               >
-                {formatSignedPercent(totalOrdersDelta)}
+                {isLoading ? "--" : formatSignedPercent(totalOrdersDelta)}
               </Badge>
             </div>
           </CardHeader>
@@ -97,7 +102,7 @@ export function OrdersCards() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">In Progress</p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              {inProgress}
+              {isLoading ? <Skeleton className="h-9 w-16" /> : inProgress}
             </CardTitle>
             <div className="absolute right-4 top-4">
               <Badge
@@ -117,14 +122,14 @@ export function OrdersCards() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Completed</p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              {completed}
+              {isLoading ? <Skeleton className="h-9 w-16" /> : completed}
             </CardTitle>
             <div className="absolute right-4 top-4">
               <Badge
                 variant="outline"
                 className="rounded-lg border-emerald-200 bg-emerald-50 text-xs text-emerald-700"
               >
-                {completedRate}%
+                {isLoading ? "--" : `${completedRate}%`}
               </Badge>
             </div>
           </CardHeader>
@@ -139,14 +144,18 @@ export function OrdersCards() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Average order value</p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              Rs. {averageOrderValue.toLocaleString("en-PK")}
+              {isLoading ? (
+                <Skeleton className="h-9 w-28" />
+              ) : (
+                <>Rs. {averageOrderValue.toLocaleString("en-PK")}</>
+              )}
             </CardTitle>
             <div className="absolute right-4 top-4">
               <Badge
                 variant="outline"
                 className="rounded-lg border-green-200 bg-green-50 text-xs text-green-700"
               >
-                {formatSignedPercent(averageOrderValueDelta)}
+                {isLoading ? "--" : formatSignedPercent(averageOrderValueDelta)}
               </Badge>
             </div>
           </CardHeader>
@@ -161,15 +170,16 @@ export function OrdersCards() {
               Average order completion time
             </p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              {averageCompletion} min
+              {isLoading ? <Skeleton className="h-9 w-24" /> : `${averageCompletion} min`}
             </CardTitle>
             <div className="absolute right-4 top-4">
               <Badge
                 variant="outline"
                 className="rounded-lg border-blue-200 bg-blue-50 text-xs text-blue-700"
               >
-                {averageCompletionDelta >= 0 ? "+" : ""}
-                {averageCompletionDelta} min
+                {isLoading
+                  ? "--"
+                  : `${averageCompletionDelta >= 0 ? "+" : ""}${averageCompletionDelta} min`}
               </Badge>
             </div>
           </CardHeader>
@@ -181,4 +191,3 @@ export function OrdersCards() {
     </div>
   )
 }
-

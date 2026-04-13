@@ -5,6 +5,7 @@ import { fetchOwnerOrdersTable } from "@/lib/tabletap-supabase-api"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -77,6 +78,7 @@ export function OrdersOverview() {
   const [dateRangeFilter, setDateRangeFilter] =
     React.useState<DateRangeFilter>("today")
   const [orders, setOrders] = React.useState<OrderRow[]>([])
+  const [isLoading, setIsLoading] = React.useState(true)
 
   React.useEffect(() => {
     let cancelled = false
@@ -86,7 +88,7 @@ export function OrdersOverview() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerOrdersTable("f7-islamabad", 31)
+        const response = await fetchOwnerOrdersTable(undefined, 31)
         if (!cancelled) {
           setOrders(response.rows)
         }
@@ -96,6 +98,9 @@ export function OrdersOverview() {
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -149,7 +154,7 @@ export function OrdersOverview() {
         (a, b) =>
           new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime()
       )
-  }, [search, statusFilter, dateRangeFilter])
+  }, [search, statusFilter, dateRangeFilter, orders])
 
   return (
     <Card className="mx-4 lg:mx-6">
@@ -196,7 +201,14 @@ export function OrdersOverview() {
         </div>
       </CardHeader>
       <CardContent>
-        {filteredOrders.length === 0 ? (
+        {isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+          </div>
+        ) : filteredOrders.length === 0 ? (
           <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
             No orders found for the selected filters.
           </div>
@@ -280,4 +292,3 @@ export function OrdersOverview() {
     </Card>
   )
 }
-

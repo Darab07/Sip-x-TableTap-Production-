@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -27,6 +28,7 @@ const formatCurrency = (value: number) =>
 export function MenuInsightsOverview() {
   const [dateRange, setDateRange] = React.useState<DateRangeFilter>("today")
   const [category, setCategory] = React.useState("all")
+  const [isLoading, setIsLoading] = React.useState(true)
   const [categories, setCategories] = React.useState<string[]>([])
   const [payload, setPayload] = React.useState<{
     totalItemsSold: number
@@ -53,7 +55,7 @@ export function MenuInsightsOverview() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerMenuInsights("f7-islamabad", dateRange, category)
+        const response = await fetchOwnerMenuInsights(undefined, dateRange, category)
         if (!cancelled) {
           setCategories(response.categories)
           setPayload({
@@ -69,6 +71,9 @@ export function MenuInsightsOverview() {
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -97,7 +102,7 @@ export function MenuInsightsOverview() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Total Items Sold</p>
             <CardTitle className="@[250px]/card:text-3xl text-2xl font-semibold tabular-nums">
-              {payload.totalItemsSold.toLocaleString("en-US")}
+              {isLoading ? <Skeleton className="h-9 w-24" /> : payload.totalItemsSold.toLocaleString("en-US")}
             </CardTitle>
           </CardHeader>
           <CardFooter className="text-sm text-muted-foreground">
@@ -109,9 +114,9 @@ export function MenuInsightsOverview() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Best-Selling Item</p>
             <CardTitle className="text-xl font-semibold">
-              {payload.bestSellingItem?.itemName ?? "No data"}
+              {isLoading ? <Skeleton className="h-7 w-44" /> : payload.bestSellingItem?.itemName ?? "No data"}
             </CardTitle>
-            {payload.bestSellingItem ? (
+            {payload.bestSellingItem && !isLoading ? (
               <div className="absolute right-4 top-4">
                 <Badge
                   variant="outline"
@@ -131,9 +136,9 @@ export function MenuInsightsOverview() {
           <CardHeader className="relative">
             <p className="text-sm text-muted-foreground">Highest Revenue Item</p>
             <CardTitle className="text-xl font-semibold">
-              {payload.highestRevenueItem?.itemName ?? "No data"}
+              {isLoading ? <Skeleton className="h-7 w-44" /> : payload.highestRevenueItem?.itemName ?? "No data"}
             </CardTitle>
-            {payload.highestRevenueItem ? (
+            {payload.highestRevenueItem && !isLoading ? (
               <div className="absolute right-4 top-4">
                 <Badge
                   variant="outline"
@@ -185,45 +190,54 @@ export function MenuInsightsOverview() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item Name</TableHead>
-                  <TableHead className="text-right">Quantity Sold</TableHead>
-                  <TableHead className="text-right">Revenue</TableHead>
-                  <TableHead className="text-right">Avg Order Contribution</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {payload.rows.length === 0 ? (
+          {isLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-full" />
+              <Skeleton className="h-11 w-full" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell
-                      colSpan={4}
-                      className="h-24 text-center text-muted-foreground"
-                    >
-                      No menu insights data for selected filters.
-                    </TableCell>
+                    <TableHead>Item Name</TableHead>
+                    <TableHead className="text-right">Quantity Sold</TableHead>
+                    <TableHead className="text-right">Revenue</TableHead>
+                    <TableHead className="text-right">Avg Order Contribution</TableHead>
                   </TableRow>
-                ) : (
-                  payload.rows.map((item) => (
-                    <TableRow key={item.itemName}>
-                      <TableCell className="font-medium">{item.itemName}</TableCell>
-                      <TableCell className="text-right">
-                        {item.quantitySold.toLocaleString("en-US")}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatCurrency(item.revenue)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {item.avgOrderContribution.toFixed(1)}%
+                </TableHeader>
+                <TableBody>
+                  {payload.rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={4}
+                        className="h-24 text-center text-muted-foreground"
+                      >
+                        No menu insights data for selected filters.
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
+                  ) : (
+                    payload.rows.map((item) => (
+                      <TableRow key={item.itemName}>
+                        <TableCell className="font-medium">{item.itemName}</TableCell>
+                        <TableCell className="text-right">
+                          {item.quantitySold.toLocaleString("en-US")}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {formatCurrency(item.revenue)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {item.avgOrderContribution.toFixed(1)}%
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

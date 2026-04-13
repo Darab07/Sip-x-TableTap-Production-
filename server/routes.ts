@@ -12,12 +12,14 @@ import {
 import {
   getWebPushPublicKey,
   removePushSubscription,
+  notifyTrackedOrderStatus,
   startOrderPushTracking,
   type PushSubscriptionPayload,
   upsertPushSubscription,
 } from "./push.js";
 import {
   createAdminQrCode,
+  createAdminTakeawayQrCode,
   deleteAdminQrCode,
   getAdminEarnings,
   getAdminQrCodes,
@@ -28,6 +30,8 @@ import {
   getOrderTrackerStatusForCustomer,
   getPublicTableAccess,
   getOutletOptions,
+  getOutletOrderingSettingsForBranch,
+  updateOutletOrderingSettingsForBranch,
   getOwnerMenuInsights,
   getOwnerOrdersSummary,
   getOwnerOrdersTable,
@@ -39,6 +43,7 @@ import {
   getOwnerTopSellingItems,
   placeOrderInSupabase,
   getCustomerOrderHistoryForAccount,
+  getCustomerLoyaltySummaryForAccount,
   upsertCustomerDeviceProfile,
   updateManagerMenuItem,
   updateManagerTableAvailability,
@@ -84,12 +89,14 @@ const pruneWaiterCalls = (now = Date.now()) => {
 
 export const buildApiRouter = (): Router => {
   const router = Router();
+  const DEFAULT_BRANCH_CODE = String(process.env.DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
   const requireCustomerAuth = requireAuthenticatedUser();
   const requireStaffAccess = requireStaffRole("manager", { skipBranchCheck: true });
   const requireManagerAccess = requireStaffRole("manager");
   const requireOwnerAccess = requireStaffRole("owner");
   const requireAdminAccess = requireStaffRole("admin", { skipBranchCheck: true });
+  const enableLegacyCustomerApis = process.env.ENABLE_LEGACY_TABLE_SESSION_APIS === "true";
 
   router.use((_req, res, next) => {
     res.setHeader("Cache-Control", "no-store, max-age=0");
@@ -138,7 +145,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const catalog = await getMenuCatalogForBranch(branchCode);
       res.json(catalog);
     }),
@@ -150,7 +157,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const tableNumber = Number(req.query.tableNumber);
       if (!Number.isFinite(tableNumber) || tableNumber <= 0) {
         throw new HttpError(400, "Valid tableNumber is required");
@@ -171,7 +178,7 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(400, "Valid tableNumber is required");
       }
       const payload = await checkInTableFromQr(
-        branchCode || "f7-islamabad",
+        branchCode || DEFAULT_BRANCH_CODE,
         Math.round(Number(tableNumber)),
       );
       res.status(201).json(payload);
@@ -197,7 +204,7 @@ export const buildApiRouter = (): Router => {
       const normalizedBranchCode =
         typeof branchCode === "string" && branchCode.trim()
           ? branchCode.trim()
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const normalizedTableNumber = Math.round(Number(tableNumber));
       const normalizedTableLabel =
         typeof tableLabel === "string" && tableLabel.trim()
@@ -228,7 +235,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const sinceRaw =
         typeof req.query.since === "string" ? Number(req.query.since) : 0;
       const since = Number.isFinite(sinceRaw) ? Math.max(0, sinceRaw) : 0;
@@ -298,7 +305,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const limitRaw =
         typeof req.query.limit === "string" ? Number(req.query.limit) : 200;
       const safeLimit = Number.isFinite(limitRaw) ? limitRaw : 200;
@@ -311,6 +318,30 @@ export const buildApiRouter = (): Router => {
       });
 
       res.json({ orders });
+    }),
+  );
+
+  router.get(
+    "/orders/loyalty-summary",
+    requireCustomerAuth,
+    asyncHandler(async (req, res) => {
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.email) {
+        throw new HttpError(401, "You must be logged in to view loyalty summary");
+      }
+
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : DEFAULT_BRANCH_CODE;
+
+      const summary = await getCustomerLoyaltySummaryForAccount({
+        customerAuthUserId: authenticatedUser.id,
+        customerEmail: authenticatedUser.email,
+        branchCode,
+      });
+
+      res.json({ summary });
     }),
   );
 
@@ -353,7 +384,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const orders = await getManagerLiveOrders(branchCode);
       res.json({ orders });
     }),
@@ -366,9 +397,58 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const items = await getManagerMenuItems(branchCode);
       res.json({ items });
+    }),
+  );
+
+  router.get(
+    "/manager/outlet-ordering-settings",
+    requireManagerAccess,
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.query.branchCode === "string"
+          ? req.query.branchCode
+          : DEFAULT_BRANCH_CODE;
+      const settings = await getOutletOrderingSettingsForBranch(branchCode);
+      res.json({ settings });
+    }),
+  );
+
+  router.patch(
+    "/manager/outlet-ordering-settings",
+    requireManagerAccess,
+    asyncHandler(async (req, res) => {
+      const {
+        branchCode,
+        serviceStartTime,
+        serviceEndTime,
+        lastTakeawayTime,
+        timezone,
+      } = req.body as {
+        branchCode?: string;
+        serviceStartTime?: string;
+        serviceEndTime?: string;
+        lastTakeawayTime?: string;
+        timezone?: string;
+      };
+
+      if (!serviceStartTime || !serviceEndTime || !lastTakeawayTime) {
+        throw new HttpError(
+          400,
+          "serviceStartTime, serviceEndTime, and lastTakeawayTime are required",
+        );
+      }
+
+      const settings = await updateOutletOrderingSettingsForBranch({
+        branchCode: typeof branchCode === "string" ? branchCode : DEFAULT_BRANCH_CODE,
+        serviceStartTime,
+        serviceEndTime,
+        lastTakeawayTime,
+        timezone,
+      });
+      res.json({ settings });
     }),
   );
 
@@ -385,7 +465,7 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(400, "itemId is required");
       }
       const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
       const item = await updateManagerMenuItem({ id: itemId, price, available, branchCode });
       res.json({ item });
     }),
@@ -398,7 +478,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const snapshot = await getTableSnapshot(branchCode);
       res.json(snapshot);
     }),
@@ -416,7 +496,7 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(400, "tableId and availability are required");
       }
       const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
       const table = await updateManagerTableAvailability({ tableId, availability, branchCode });
       res.json({ table });
     }),
@@ -434,8 +514,9 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(400, "orderNumber and status are required");
       }
       const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : "f7-islamabad";
+        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
       const updated = await updateOrderStatusFromManager({ orderNumber, status, branchCode });
+      await notifyTrackedOrderStatus(orderNumber, updated.status);
       res.json({ order: updated });
     }),
   );
@@ -461,7 +542,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
 
       const order = await getOrderTrackerStatusForCustomer({
         orderNumber,
@@ -481,7 +562,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const rows = await getAdminQrCodes(branchCode);
       res.json({ rows });
     }),
@@ -499,14 +580,26 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(400, "Valid tableNumber is required");
       }
       await createAdminQrCode(
-        branchCode || "f7-islamabad",
+        branchCode || DEFAULT_BRANCH_CODE,
         Math.round(Number(tableNumber)),
       );
-      const rows = await getAdminQrCodes(branchCode || "f7-islamabad");
+      const rows = await getAdminQrCodes(branchCode || DEFAULT_BRANCH_CODE);
       res.status(201).json({ rows });
     }),
   );
 
+  router.post(
+    "/admin/qr-codes/takeaway",
+    requireAdminAccess,
+    asyncHandler(async (req, res) => {
+      const branchCode =
+        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
+      const created = await createAdminTakeawayQrCode(branchCode);
+      const rows = await getAdminQrCodes(branchCode);
+      const createdRow = rows.find((row) => row.tableNumber === created.tableNumber);
+      res.status(201).json({ rows, created: createdRow ?? null });
+    }),
+  );
   router.delete(
     "/admin/qr-codes/:id",
     requireAdminAccess,
@@ -536,7 +629,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const cards = await getOwnerDashboardCards(branchCode);
       res.json(cards);
     }),
@@ -549,7 +642,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
       const trend = await getOwnerSalesTrend(branchCode, rangeDays);
       res.json({ points: trend });
@@ -563,7 +656,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
       const rows = await getOwnerTopSellingItems(branchCode, rangeDays);
       res.json({ rows });
@@ -577,7 +670,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const snapshot = await getTableSnapshot(branchCode);
       res.json(snapshot);
     }),
@@ -590,7 +683,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const dateRange =
         typeof req.query.dateRange === "string"
           ? (req.query.dateRange as "today" | "this-week" | "this-month")
@@ -609,7 +702,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const summary = await getOwnerOrdersSummary(branchCode);
       res.json(summary);
     }),
@@ -622,7 +715,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const mode = typeof req.query.mode === "string" ? req.query.mode : "day";
       if (mode === "hour") {
         const points = await getOwnerOrdersTrendByHourToday(branchCode);
@@ -642,7 +735,7 @@ export const buildApiRouter = (): Router => {
       const branchCode =
         typeof req.query.branchCode === "string"
           ? req.query.branchCode
-          : "f7-islamabad";
+          : DEFAULT_BRANCH_CODE;
       const rangeDays = Number(req.query.rangeDays ?? 31) || 31;
       const rows = await getOwnerOrdersTable(branchCode, rangeDays);
       res.json({ rows });
@@ -651,52 +744,67 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/push/subscribe",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
-      const { userId, subscription } = req.body as {
-        userId?: string;
+      const { subscription } = req.body as {
         subscription?: PushSubscriptionPayload;
       };
 
-      if (!userId || !subscription?.endpoint || !subscription?.keys?.auth || !subscription?.keys?.p256dh) {
-        throw new HttpError(400, "userId and valid PushSubscription are required");
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.id) {
+        throw new HttpError(401, "You must be logged in to subscribe for notifications");
       }
 
-      upsertPushSubscription(userId, subscription);
+      if (!subscription?.endpoint || !subscription?.keys?.auth || !subscription?.keys?.p256dh) {
+        throw new HttpError(400, "Valid PushSubscription is required");
+      }
+
+      upsertPushSubscription(authenticatedUser.id, subscription);
       res.status(201).json({ ok: true });
     }),
   );
 
   router.post(
     "/push/unsubscribe",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
-      const { userId, endpoint } = req.body as { userId?: string; endpoint?: string };
-      if (!userId || !endpoint) {
-        throw new HttpError(400, "userId and endpoint are required");
+      const { endpoint } = req.body as { endpoint?: string };
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.id) {
+        throw new HttpError(401, "You must be logged in to unsubscribe notifications");
+      }
+      if (!endpoint) {
+        throw new HttpError(400, "endpoint is required");
       }
 
-      removePushSubscription(userId, endpoint);
+      removePushSubscription(authenticatedUser.id, endpoint);
       res.json({ ok: true });
     }),
   );
 
   router.post(
     "/orders/track/start",
+    requireCustomerAuth,
     asyncHandler(async (req, res) => {
-      const { userId, orderNumber, tableLabel } = req.body as {
-        userId?: string;
+      const { orderNumber, tableLabel } = req.body as {
         orderNumber?: string;
         tableLabel?: string;
       };
-
-      if (!userId || !orderNumber || !tableLabel) {
-        throw new HttpError(400, "userId, orderNumber and tableLabel are required");
+      const authenticatedUser = req.authenticatedUser;
+      if (!authenticatedUser?.id) {
+        throw new HttpError(401, "You must be logged in to start order tracking");
       }
 
-      await startOrderPushTracking({ userId, orderNumber, tableLabel });
+      if (!orderNumber || !tableLabel) {
+        throw new HttpError(400, "orderNumber and tableLabel are required");
+      }
+
+      await startOrderPushTracking({ userId: authenticatedUser.id, orderNumber, tableLabel });
       res.status(202).json({ ok: true });
     }),
   );
 
+  if (enableLegacyCustomerApis) {
   router.get(
     "/users/:username",
     asyncHandler(async (req, res) => {
@@ -861,14 +969,29 @@ export const buildApiRouter = (): Router => {
       res.json(state);
     }),
   );
+  }
 
   return router;
 };
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.use("/api", buildApiRouter());
+  app.use("/api/*", (_req, res) => {
+    res.status(404).json({ message: "API route not found" });
+  });
 
   const httpServer = createServer(app);
   return httpServer;
 }
+
+
+
+
+
+
+
+
+
+
+
 

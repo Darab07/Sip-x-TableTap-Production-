@@ -13,6 +13,7 @@ const roleRank: RoleRank = {
 };
 
 const STAFF_CACHE_TTL_MS = 15_000;
+const DEFAULT_BRANCH_CODE = String(process.env.DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
 type AuthenticatedUser = {
   id: string;
@@ -95,7 +96,7 @@ const getBranchCodeFromRequest = (req: Request) => {
   const fromBody = typeof body?.branchCode === "string" ? body.branchCode.trim() : "";
   if (fromBody) return fromBody;
 
-  return "f7-islamabad";
+  return DEFAULT_BRANCH_CODE;
 };
 
 const resolveAuthenticatedUser = async (req: Request): Promise<AuthenticatedUser> => {

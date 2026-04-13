@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import * as React from "react"
 import {
@@ -14,6 +14,8 @@ import {
 } from "lucide-react"
 import { useLocation } from "wouter"
 import { fetchOutlets } from "@/lib/tabletap-supabase-api"
+import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
+import { supabaseBrowser } from "@/lib/supabase"
 
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -71,7 +73,7 @@ export function AppSidebar({
   dashboardRole,
   ...props
 }: AppSidebarProps) {
-  const [location] = useLocation()
+  const [location, setLocation] = useLocation()
   const [outlets, setOutlets] = React.useState<
     Array<{ id: string; branchCode: string; branchLabel: string; restaurantName: string }>
   >([])
@@ -80,6 +82,13 @@ export function AppSidebar({
   React.useEffect(() => {
     let cancelled = false
     const load = async () => {
+      if (supabaseBrowser) {
+        const { data } = await supabaseBrowser.auth.getSession()
+        if (!data.session?.access_token) {
+          return
+        }
+      }
+
       try {
         const response = await fetchOutlets()
         if (!cancelled) {
@@ -90,6 +99,15 @@ export function AppSidebar({
         }
       } catch (error) {
         if (!cancelled) {
+          const message = error instanceof Error ? error.message.toLowerCase() : ""
+          if (
+            message.includes("missing authorization bearer token") ||
+            message.includes("invalid or expired authentication token")
+          ) {
+            clearRestaurantAuthentication()
+            setLocation("/restaurant")
+            return
+          }
           console.warn("Outlets sync failed:", error)
         }
       }
@@ -98,7 +116,8 @@ export function AppSidebar({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [setLocation])
+
   const resolvedRole =
     dashboardRole ??
     (location.startsWith("/restaurant/manager")
@@ -234,7 +253,8 @@ export function AppSidebar({
   return (
     <Sidebar
       {...props}
-      collapsible={sidebarCollapsibleMode}
+      collapsible={sidebarCollapsibleMode}
+
     >
       <SidebarHeader>
         <SidebarMenu>
@@ -315,10 +335,8 @@ export function AppSidebar({
         </div>
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={user} />
+        <NavUser user={user} dashboardRole={resolvedRole} />
       </SidebarFooter>
     </Sidebar>
   )
 }
-
-

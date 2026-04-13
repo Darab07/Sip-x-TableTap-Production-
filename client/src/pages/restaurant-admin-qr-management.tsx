@@ -1,4 +1,5 @@
-﻿import React from "react";
+import React from "react";
+import { useLocation } from "wouter";
 import {
   Copy,
   ExternalLink,
@@ -8,6 +9,7 @@ import {
 } from "lucide-react";
 import {
   createAdminQrCodeApi,
+  createAdminTakeawayQrCodeApi,
   deleteAdminQrCodeApi,
   fetchAdminQrCodes,
 } from "@/lib/tabletap-supabase-api";
@@ -23,7 +25,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { supabaseBrowser } from "@/lib/supabase";
+import { clearRestaurantAuthentication } from "@/lib/restaurant-auth";
 import {
   Table,
   TableBody,
@@ -37,14 +42,21 @@ type QrCodeRecord = {
   id: string;
   tableNumber: number;
   tableLabel: string;
+  qrType: "table" | "takeaway";
   createdAt: string;
 };
 
-const buildTableUrl = (tableNumber: number) => {
+const TAKEAWAY_TABLE_NUMBER_BASE = 9000;
+
+const buildTableUrl = (tableNumber: number, qrType: "table" | "takeaway" = "table") => {
+  const tableParam =
+    qrType === "takeaway"
+      ? `Takeaway${Math.max(1, Number(tableNumber) - TAKEAWAY_TABLE_NUMBER_BASE + 1)}`
+      : `Table${tableNumber}`;
   if (typeof window === "undefined") {
-    return `/sip/menu?table=Table${tableNumber}`;
+    return `/sip/menu?table=${encodeURIComponent(tableParam)}`;
   }
-  return `${window.location.origin}/sip/menu?table=${encodeURIComponent(`Table${tableNumber}`)}`;
+  return `${window.location.origin}/sip/menu?table=${encodeURIComponent(tableParam)}`;
 };
 
 const createQrImageUrl = (url: string, size = 280) =>
@@ -61,10 +73,29 @@ const formatTimestamp = (value: string) =>
   });
 
 export default function RestaurantAdminQrManagement() {
+  const [, setLocation] = useLocation();
   const [tableInput, setTableInput] = React.useState("");
   const [statusMessage, setStatusMessage] = React.useState("");
   const [qrCodes, setQrCodes] = React.useState<QrCodeRecord[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
+
+  const ensureAuthenticatedSession = async () => {
+    if (!supabaseBrowser) {
+      setStatusMessage("Supabase auth is not configured.");
+      return false;
+    }
+
+    const { data } = await supabaseBrowser.auth.getSession();
+    if (!data.session?.access_token) {
+      clearRestaurantAuthentication();
+      setStatusMessage("Session expired. Please log in again.");
+      setLocation("/restaurant");
+      return false;
+    }
+
+    return true;
+  };
 
   React.useEffect(() => {
     let cancelled = false;
@@ -72,18 +103,39 @@ export default function RestaurantAdminQrManagement() {
     const load = async () => {
       if (cancelled || inFlight) return;
       if (typeof document !== "undefined" && document.hidden) return;
+
+      if (supabaseBrowser) {
+        const { data } = await supabaseBrowser.auth.getSession();
+        if (!data.session?.access_token) {
+          if (!cancelled) {
+            clearRestaurantAuthentication();
+            setStatusMessage("Session expired. Please log in again.");
+            setLocation("/restaurant");
+          }
+          return;
+        }
+      }
+
       inFlight = true;
       try {
-        const response = await fetchAdminQrCodes("f7-islamabad");
+        const response = await fetchAdminQrCodes();
         if (!cancelled) {
           setQrCodes(response.rows);
         }
       } catch (error) {
         if (!cancelled) {
+          const message = error instanceof Error ? error.message.toLowerCase() : "";
+          if (message.includes("missing authorization bearer token") || message.includes("invalid or expired authentication token")) {
+            clearRestaurantAuthentication();
+            setStatusMessage("Session expired. Please log in again.");
+            setLocation("/restaurant");
+            return;
+          }
           console.warn("QR codes sync failed:", error);
         }
       } finally {
         inFlight = false;
+        setIsLoading(false);
       }
     };
 
@@ -119,7 +171,7 @@ export default function RestaurantAdminQrManagement() {
     qrCodes.find((entry) => entry.id === selectedId) ?? qrCodes[0] ?? null;
 
   const selectedQrUrl = selectedQr
-    ? buildTableUrl(selectedQr.tableNumber)
+    ? buildTableUrl(selectedQr.tableNumber, selectedQr.qrType)
     : null;
 
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -130,20 +182,57 @@ export default function RestaurantAdminQrManagement() {
       return;
     }
 
+    if (!(await ensureAuthenticatedSession())) {
+      return;
+    }
+
     try {
       const existingId = qrCodes.find((entry) => entry.tableNumber === parsed)?.id;
-      const response = await createAdminQrCodeApi(parsed, "f7-islamabad");
+      const response = await createAdminQrCodeApi(parsed);
       setQrCodes(response.rows);
       const selected = response.rows.find((entry) => entry.tableNumber === parsed);
       setSelectedId(selected?.id ?? existingId ?? null);
       setStatusMessage(`QR ${existingId ? "updated" : "created"} for Table${parsed}.`);
       setTableInput("");
     } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      if (
+        message.includes("missing authorization bearer token") ||
+        message.includes("invalid or expired authentication token")
+      ) {
+        setStatusMessage("Session expired. Please log in again.");
+        return;
+      }
       console.warn("Failed to create QR code:", error);
       setStatusMessage("Unable to create QR code right now.");
     }
   };
 
+  const handleCreateTakeaway = async () => {
+    if (!(await ensureAuthenticatedSession())) {
+      return;
+    }
+
+    try {
+      const response = await createAdminTakeawayQrCodeApi();
+      setQrCodes(response.rows);
+      if (response.created?.id) {
+        setSelectedId(response.created.id);
+      }
+      setStatusMessage(`Takeaway QR created (${response.created?.tableLabel ?? "Takeaway"}).`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      if (
+        message.includes("missing authorization bearer token") ||
+        message.includes("invalid or expired authentication token")
+      ) {
+        setStatusMessage("Session expired. Please log in again.");
+        return;
+      }
+      console.warn("Failed to create takeaway QR code:", error);
+      setStatusMessage("Unable to create takeaway QR code right now.");
+    }
+  };
   const handleCopyLink = async (url: string) => {
     try {
       await navigator.clipboard.writeText(url);
@@ -157,6 +246,11 @@ export default function RestaurantAdminQrManagement() {
     if (!window.confirm(`Delete QR code for ${tableLabel}?`)) {
       return;
     }
+
+    if (!(await ensureAuthenticatedSession())) {
+      return;
+    }
+
     try {
       await deleteAdminQrCodeApi(id);
       setQrCodes((previous) => previous.filter((entry) => entry.id !== id));
@@ -165,6 +259,14 @@ export default function RestaurantAdminQrManagement() {
       }
       setStatusMessage(`Deleted QR code for ${tableLabel}.`);
     } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      if (
+        message.includes("missing authorization bearer token") ||
+        message.includes("invalid or expired authentication token")
+      ) {
+        setStatusMessage("Session expired. Please log in again.");
+        return;
+      }
       console.warn("Failed to delete QR code:", error);
       setStatusMessage("Unable to delete QR code right now.");
     }
@@ -205,14 +307,20 @@ export default function RestaurantAdminQrManagement() {
                       />
                       <Button type="submit">
                         <PlusCircle />
-                        Generate QR
+                        Generate Table QR
                       </Button>
                     </form>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" onClick={() => void handleCreateTakeaway()}>
+                        <PlusCircle />
+                        Generate Takeaway QR
+                      </Button>
+                    </div>
                     {statusMessage ? (
                       <p className="text-sm text-muted-foreground">{statusMessage}</p>
                     ) : null}
                     <p className="text-sm text-muted-foreground">
-                      Example URL: <span className="font-medium">/sip/menu?table=Table3</span>
+                      Example URL: <span className="font-medium">/sip/menu?table=Table3</span>. Takeaway links are generated automatically.
                     </p>
                   </CardContent>
                 </Card>
@@ -223,11 +331,17 @@ export default function RestaurantAdminQrManagement() {
                     <CardDescription>
                       {selectedQr
                         ? `${selectedQr.tableLabel} opens directly to its menu session.`
-                        : "Select or create a table QR code to preview."}
+                        : "Select or create a table/takeaway QR code to preview."}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    {selectedQr && selectedQrUrl ? (
+                    {isLoading ? (
+                      <div className="space-y-3">
+                        <Skeleton className="mx-auto h-52 w-52 rounded-lg" />
+                        <Skeleton className="h-5 w-40" />
+                        <Skeleton className="h-10 w-full" />
+                      </div>
+                    ) : selectedQr && selectedQrUrl ? (
                       <>
                         <div className="mx-auto w-fit rounded-lg border bg-white p-3">
                           <img
@@ -287,9 +401,19 @@ export default function RestaurantAdminQrManagement() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {qrCodes.length ? (
+                      {isLoading ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="py-6">
+                            <div className="space-y-2">
+                              <Skeleton className="h-10 w-full" />
+                              <Skeleton className="h-10 w-full" />
+                              <Skeleton className="h-10 w-full" />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : qrCodes.length ? (
                         qrCodes.map((entry) => {
-                          const url = buildTableUrl(entry.tableNumber);
+                          const url = buildTableUrl(entry.tableNumber, entry.qrType);
                           return (
                             <TableRow
                               key={entry.id}
@@ -297,7 +421,12 @@ export default function RestaurantAdminQrManagement() {
                               data-state={selectedId === entry.id ? "selected" : undefined}
                               onClick={() => setSelectedId(entry.id)}
                             >
-                              <TableCell className="font-medium">{entry.tableLabel}</TableCell>
+                              <TableCell className="font-medium">
+                                <div className="flex items-center gap-2">
+                                  <span>{entry.tableLabel}</span>
+                                  <Badge variant="outline">{entry.qrType === "takeaway" ? "Takeaway" : "Table"}</Badge>
+                                </div>
+                              </TableCell>
                               <TableCell>
                                 <img
                                   src={createQrImageUrl(url, 70)}
@@ -382,4 +511,11 @@ export default function RestaurantAdminQrManagement() {
     </SidebarProvider>
   );
 }
+
+
+
+
+
+
+
 

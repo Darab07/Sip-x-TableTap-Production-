@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -82,7 +83,7 @@ const isInDateRange = (dateString: string, range: DateRange) => {
   )
 }
 
-export function DataTable({ data }: { data: z.infer<typeof schema>[] }) {
+export function DataTable({ data, isLoading = false }: { data: z.infer<typeof schema>[]; isLoading?: boolean }) {
   const [dateRange, setDateRange] = React.useState<DateRange>("thisMonth")
 
   const filteredData = React.useMemo(
@@ -126,72 +127,83 @@ export function DataTable({ data }: { data: z.infer<typeof schema>[] }) {
         </div>
       </CardHeader>
       <CardContent>
-        {filteredData.length === 0 ? (
-          <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-            No top-selling item data for the selected range.
+        {isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-11 w-full" />
           </div>
-        ) : null}
-
-        <div className="space-y-3 md:hidden">
-          {filteredData.map((row) => (
-            <div key={row.id} className="rounded-lg border p-3">
-              <p className="text-sm font-semibold">{row.itemName}</p>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">Quantity sold</p>
-                  <p className="text-sm font-medium">
-                    {row.quantitySold.toLocaleString("en-US")}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Revenue generated</p>
-                  <p className="text-sm font-medium">
-                    {formatCurrency(row.revenueGenerated)}
-                  </p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-xs text-muted-foreground">
-                    Number of sessions ordered in
-                  </p>
-                  <p className="text-sm font-medium">
-                    {row.sessionsOrderedIn.toLocaleString("en-US")}
-                  </p>
-                </div>
+        ) : (
+          <>
+            {filteredData.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+                No top-selling item data for the selected range.
               </div>
-            </div>
-          ))}
-        </div>
+            ) : null}
 
-        <div className="hidden overflow-x-auto md:block">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="min-w-[220px]">Item name</TableHead>
-                <TableHead className="text-right">Quantity sold</TableHead>
-                <TableHead className="text-right">Revenue generated</TableHead>
-                <TableHead className="text-right">
-                  Number of sessions ordered in
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+            <div className="space-y-3 md:hidden">
               {filteredData.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="font-medium">{row.itemName}</TableCell>
-                  <TableCell className="text-right">
-                    {row.quantitySold.toLocaleString("en-US")}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {formatCurrency(row.revenueGenerated)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {row.sessionsOrderedIn.toLocaleString("en-US")}
-                  </TableCell>
-                </TableRow>
+                <div key={row.id} className="rounded-lg border p-3">
+                  <p className="text-sm font-semibold">{row.itemName}</p>
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Quantity sold</p>
+                      <p className="text-sm font-medium">
+                        {row.quantitySold.toLocaleString("en-US")}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Revenue generated</p>
+                      <p className="text-sm font-medium">
+                        {formatCurrency(row.revenueGenerated)}
+                      </p>
+                    </div>
+                    <div className="col-span-2">
+                      <p className="text-xs text-muted-foreground">
+                        Number of sessions ordered in
+                      </p>
+                      <p className="text-sm font-medium">
+                        {row.sessionsOrderedIn.toLocaleString("en-US")}
+                      </p>
+                    </div>
+                  </div>
+                </div>
               ))}
-            </TableBody>
-          </Table>
-        </div>
+            </div>
+
+            <div className="hidden overflow-x-auto md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[220px]">Item name</TableHead>
+                    <TableHead className="text-right">Quantity sold</TableHead>
+                    <TableHead className="text-right">Revenue generated</TableHead>
+                    <TableHead className="text-right">
+                      Number of sessions ordered in
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredData.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">{row.itemName}</TableCell>
+                      <TableCell className="text-right">
+                        {row.quantitySold.toLocaleString("en-US")}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(row.revenueGenerated)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {row.sessionsOrderedIn.toLocaleString("en-US")}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   )

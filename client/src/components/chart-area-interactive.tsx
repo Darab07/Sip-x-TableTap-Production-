@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { fetchOwnerSalesTrend } from "@/lib/tabletap-supabase-api"
 
 const chartConfig = {
@@ -35,6 +36,7 @@ const formatCurrency = (value: number) =>
 
 export function ChartAreaInteractive() {
   const [timeRange, setTimeRange] = React.useState("30d")
+  const [isLoading, setIsLoading] = React.useState(true)
   const [remoteTrend, setRemoteTrend] = React.useState<Array<{ date: string; sales: number }>>([])
 
   React.useEffect(() => {
@@ -47,7 +49,7 @@ export function ChartAreaInteractive() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerSalesTrend("f7-islamabad", rangeDays)
+        const response = await fetchOwnerSalesTrend(undefined, rangeDays)
         if (cancelled) return
         setRemoteTrend(
           response.points.map((point) => ({
@@ -61,6 +63,9 @@ export function ChartAreaInteractive() {
         }
       } finally {
         inFlight = false
+        if (!cancelled) {
+          setIsLoading(false)
+        }
       }
     }
 
@@ -141,87 +146,100 @@ export function ChartAreaInteractive() {
           <div>
             <p className="text-xs uppercase tracking-wide">Period Sales</p>
             <p className="text-base font-semibold text-foreground">
-              {formatCurrency(periodSales)}
+              {isLoading ? <Skeleton className="mt-1 h-5 w-28" /> : formatCurrency(periodSales)}
             </p>
           </div>
           <div>
             <p className="text-xs uppercase tracking-wide">Avg / Day</p>
             <p className="text-base font-semibold text-foreground">
-              {formatCurrency(averageDailySales)}
+              {isLoading ? <Skeleton className="mt-1 h-5 w-24" /> : formatCurrency(averageDailySales)}
             </p>
           </div>
           <div>
             <p className="text-xs uppercase tracking-wide">Trend</p>
-            <p
-              className={`text-base font-semibold ${
-                trendPercentage >= 0 ? "text-green-700" : "text-red-700"
-              }`}
-            >
-              {trendPercentage >= 0 ? "+" : ""}
-              {trendPercentage.toFixed(1)}%
-            </p>
-            <p className="text-xs">
-              Peak:{" "}
-              {peakSalesPoint.date
-                ? `${new Date(peakSalesPoint.date).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                  })} (${formatCurrency(peakSalesPoint.sales)})`
-                : "N/A"}
-            </p>
+            {isLoading ? (
+              <>
+                <Skeleton className="mt-1 h-5 w-16" />
+                <Skeleton className="mt-1 h-4 w-40" />
+              </>
+            ) : (
+              <>
+                <p
+                  className={`text-base font-semibold ${
+                    trendPercentage >= 0 ? "text-green-700" : "text-red-700"
+                  }`}
+                >
+                  {trendPercentage >= 0 ? "+" : ""}
+                  {trendPercentage.toFixed(1)}%
+                </p>
+                <p className="text-xs">
+                  Peak:{" "}
+                  {peakSalesPoint.date
+                    ? `${new Date(peakSalesPoint.date).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })} (${formatCurrency(peakSalesPoint.sales)})`
+                    : "N/A"}
+                </p>
+              </>
+            )}
           </div>
         </div>
       </CardHeader>
       <CardContent className="px-1 pt-2 sm:px-6 sm:pt-4">
-        <ChartContainer
-          config={chartConfig}
-          className="aspect-auto h-[260px] w-full"
-        >
-          <AreaChart data={filteredData}>
-            <defs>
-              <linearGradient id="fillSales" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="var(--color-sales)" stopOpacity={0.35} />
-                <stop offset="95%" stopColor="var(--color-sales)" stopOpacity={0.05} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="date"
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-              minTickGap={24}
-              tickFormatter={(value) =>
-                new Date(value).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                })
-              }
-            />
-            <ChartTooltip
-              cursor={false}
-              content={
-                <ChartTooltipContent
-                  labelFormatter={(value) =>
-                    new Date(value).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    })
-                  }
-                  formatter={(value) => formatCurrency(Number(value))}
-                  indicator="dot"
-                />
-              }
-            />
-            <Area
-              dataKey="sales"
-              type="monotone"
-              fill="url(#fillSales)"
-              stroke="var(--color-sales)"
-              strokeWidth={2}
-            />
-          </AreaChart>
-        </ChartContainer>
+        {isLoading ? (
+          <Skeleton className="h-[260px] w-full rounded-xl" />
+        ) : (
+          <ChartContainer
+            config={chartConfig}
+            className="aspect-auto h-[260px] w-full"
+          >
+            <AreaChart data={filteredData}>
+              <defs>
+                <linearGradient id="fillSales" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--color-sales)" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="var(--color-sales)" stopOpacity={0.05} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid vertical={false} />
+              <XAxis
+                dataKey="date"
+                tickLine={false}
+                axisLine={false}
+                tickMargin={8}
+                minTickGap={24}
+                tickFormatter={(value) =>
+                  new Date(value).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  })
+                }
+              />
+              <ChartTooltip
+                cursor={false}
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(value) =>
+                      new Date(value).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                      })
+                    }
+                    formatter={(value) => formatCurrency(Number(value))}
+                    indicator="dot"
+                  />
+                }
+              />
+              <Area
+                dataKey="sales"
+                type="monotone"
+                fill="url(#fillSales)"
+                stroke="var(--color-sales)"
+                strokeWidth={2}
+              />
+            </AreaChart>
+          </ChartContainer>
+        )}
       </CardContent>
     </Card>
   )

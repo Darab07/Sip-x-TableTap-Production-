@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import {
   Table,
@@ -100,9 +101,10 @@ export default function RestaurantManagerTableManagement({
     string | null
   >(null)
 
+  const [isLoading, setIsLoading] = React.useState(true)
   const syncTables = React.useCallback(async () => {
     try {
-      const response = await fetchManagerTableManagement("f7-islamabad")
+      const response = await fetchManagerTableManagement()
       setTables(
         response.rows.map((row) => ({
           id: row.id,
@@ -120,6 +122,9 @@ export default function RestaurantManagerTableManagement({
       )
     } catch (error) {
       console.warn("Manager table management sync failed:", error)
+    }
+    finally {
+      setIsLoading(false)
     }
   }, [])
 
@@ -270,6 +275,15 @@ export default function RestaurantManagerTableManagement({
           <div className="@container/main flex flex-1 flex-col gap-2">
             <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
               <div className="*:data-[slot=card]:shadow-xs grid grid-cols-1 gap-4 px-4 md:grid-cols-2 xl:grid-cols-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card lg:px-6">
+                {isLoading ? (
+                  <>
+                    <Skeleton className="h-28 w-full rounded-xl" />
+                    <Skeleton className="h-28 w-full rounded-xl" />
+                    <Skeleton className="h-28 w-full rounded-xl" />
+                    <Skeleton className="h-28 w-full rounded-xl" />
+                  </>
+                ) : (
+                <>
                 <Card className="@container/card">
                   <CardHeader className="relative">
                     <p className="text-sm text-muted-foreground">Total Tables</p>
@@ -302,6 +316,8 @@ export default function RestaurantManagerTableManagement({
                     </CardTitle>
                   </CardHeader>
                 </Card>
+                </>
+                )}
               </div>
 
               <Card className="mx-4 lg:mx-6">
@@ -343,7 +359,13 @@ export default function RestaurantManagerTableManagement({
                     ))}
                   </div>
 
-                  {filteredTables.length === 0 ? (
+                  {isLoading ? (
+                    <div className="space-y-3">
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                      <Skeleton className="h-12 w-full" />
+                    </div>
+                  ) : filteredTables.length === 0 ? (
                     <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
                       No tables found.
                     </div>
@@ -630,4 +652,6 @@ export default function RestaurantManagerTableManagement({
     </SidebarProvider>
   )
 }
+
+
 
