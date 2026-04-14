@@ -9,6 +9,7 @@ import {
 import { useLocation } from "wouter"
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
 import { supabaseBrowser } from "@/lib/supabase"
+import { useActiveBranchCode } from "@/lib/active-branch"
 
 import {
   Avatar,
@@ -38,6 +39,8 @@ import {
 } from "@/components/ui/sidebar"
 
 type DashboardRole = "owner" | "manager" | "admin"
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
 
 export function NavUser({
   user,
@@ -54,6 +57,7 @@ export function NavUser({
   const { isMobile } = useSidebar()
   const [location, setLocation] = useLocation()
   const [showRestaurantTimings, setShowRestaurantTimings] = React.useState(false)
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
 
   const canManageRestaurantTimings =
     dashboardRole === "owner" || dashboardRole === "manager"
@@ -158,7 +162,7 @@ export function NavUser({
             <DialogTitle>Restaurant Timings</DialogTitle>
           </DialogHeader>
           <div className="px-6 pb-6 pt-3">
-            <OutletOrderingSettingsCard />
+            <OutletOrderingSettingsCard branchCode={activeBranchCode} />
           </div>
         </DialogContent>
       </Dialog>

@@ -10,6 +10,11 @@ import {
 import { placeOrder } from "@/lib/tabletap-supabase-api";
 import { supabaseBrowser } from "@/lib/supabase";
 import { getDeviceFingerprint } from "@/lib/tabletap-api";
+import {
+  buildMenuQueryString,
+  getMenuBasePathForSlug,
+  parseTableNumberFromIdentifier,
+} from "@/lib/customer-menu";
 
 interface CartItem {
   name: string;
@@ -46,6 +51,21 @@ type CardChoice = "debit" | "jazzcash" | "easypaisa" | null;
 
 export default function Checkout() {
   const [location, setLocation] = useLocation();
+  const search =
+    typeof window === "undefined" ? "" : window.location.search;
+  const queryParams = useMemo(() => new URLSearchParams(search), [search]);
+  const menuBranchCode = String(queryParams.get("branchCode") ?? "")
+    .trim()
+    .toLowerCase();
+  const menuRestaurantSlug = String(queryParams.get("restaurant") ?? "sip")
+    .trim()
+    .toLowerCase();
+  const menuBasePath = getMenuBasePathForSlug(menuRestaurantSlug);
+  const menuReturnQuery = buildMenuQueryString({
+    tableIdentifier: queryParams.get("table") ?? undefined,
+    branchCode: menuBranchCode || undefined,
+    restaurantSlug: menuRestaurantSlug,
+  });
   const [cart, setCart] = useState<Record<string, CartItem>>({});
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [selectedTip, setSelectedTip] = useState(0);
@@ -102,14 +122,23 @@ export default function Checkout() {
       : selectedCardChoice === "jazzcash"
         ? "Pay with JazzCash"
         : "Pay with Easypaisa";
+  const tableIdentifier = useMemo(
+    () => queryParams.get("table") ?? "Table1",
+    [queryParams],
+  );
+  const tableNumber = useMemo(
+    () => parseTableNumberFromIdentifier(tableIdentifier),
+    [tableIdentifier],
+  );
   const tableLabel = useMemo(() => {
-    if (typeof window === "undefined") return "Table 1";
-    const params = new URLSearchParams(window.location.search);
-    const table = params.get("table");
-    if (!table) return "Table 1";
-    const numberMatch = table.match(/(\d+)/);
-    return `Table ${numberMatch ? numberMatch[1] : table}`;
-  }, []);
+    const normalized = tableIdentifier.trim().toLowerCase();
+    if (normalized.startsWith("takeaway") || normalized.startsWith("stand")) {
+      const standNumber = Math.max(1, tableNumber - 8999);
+      return `Stand ${standNumber}`;
+    }
+    const numberMatch = tableIdentifier.match(/(\d+)/);
+    return `Table ${numberMatch ? numberMatch[1] : tableNumber}`;
+  }, [tableIdentifier, tableNumber]);
 
   const validateCardholderName = (name: string) => {
     if (!name.trim()) return "Cardholder name is required";
@@ -161,7 +190,7 @@ export default function Checkout() {
   };
 
   const handleBack = () => {
-    setLocation("/sip/menu");
+    setLocation(`${menuBasePath}${menuReturnQuery}`);
   };
 
   const handlePayment = async () => {
@@ -176,10 +205,6 @@ export default function Checkout() {
       return;
     }
 
-    const search = typeof window !== "undefined" ? window.location.search : "";
-
-    const tableNumberMatch = tableLabel.match(/(\d+)/);
-    const tableNumber = tableNumberMatch ? Number(tableNumberMatch[1]) : 1;
     const notes = localStorage.getItem(`orderNotes_${userId}`) || "";
     const cartItems = Object.values(cart);
     const deviceFingerprint = getDeviceFingerprint();
@@ -196,7 +221,7 @@ export default function Checkout() {
 
     if (sessionError || !session) {
       window.alert("Please log in or sign up before placing an order.");
-      setLocation(`/sip/menu${search}`);
+      setLocation(`${menuBasePath}${menuReturnQuery}`);
       return;
     }
 
@@ -210,6 +235,7 @@ export default function Checkout() {
     try {
       const placed = await placeOrder(
         {
+          branchCode: menuBranchCode || undefined,
           tableNumber,
           deviceFingerprint,
           customerName: customerName || undefined,
@@ -304,6 +330,7 @@ export default function Checkout() {
         await startServerOrderPushTracking({
           orderNumber: orderData.orderNumber,
           tableLabel: orderData.tableLabel,
+          menuUrl: `${menuBasePath}${menuReturnQuery}`,
         });
         sessionStorage.setItem(
           "pushSetupMessage",
@@ -320,7 +347,7 @@ export default function Checkout() {
       );
     }
 
-    setLocation(`/sip/menu${search}`);
+    setLocation(`${menuBasePath}${menuReturnQuery}`);
   };
 
   return (

@@ -1,5 +1,6 @@
 import { assertSupabaseAdmin } from "./supabase-admin.js";
 import { randomUUID } from "crypto";
+import type { StaffAccessContext } from "./auth.js";
 
 type MenuOptionValue = {
   label: string;
@@ -102,7 +103,7 @@ const OFFERED_MENU_ITEM_LOOKUP = new Map<string, Set<string>>(
 
 const isAllowedCatalogItem = (categorySlug: string, itemName: string) => {
   const allowedNames = OFFERED_MENU_ITEM_LOOKUP.get(categorySlug.toLowerCase());
-  if (!allowedNames) return false;
+  if (!allowedNames) return true;
   return allowedNames.has(itemName.toLowerCase());
 };
 
@@ -2128,27 +2129,42 @@ export const getOwnerDashboardCards = async (branchCode = DEFAULT_BRANCH) => {
   const outlet = await getOutletByBranchCode(branchCode);
 
   const { data, error } = await supabase
-    .from("v_owner_cards")
-    .select(
-      "total_orders,total_sales,average_order_value,in_progress_orders",
-    )
-    .eq("outlet_id", outlet.id)
-    .maybeSingle<{
-      total_orders: number;
-      total_sales: number;
-      average_order_value: number;
-      in_progress_orders: number;
-    }>();
+    .from("orders")
+    .select("status,total_amount")
+    .eq("outlet_id", outlet.id);
 
   if (error) {
     throw new Error(error.message);
   }
 
+  let totalOrders = 0;
+  let inProgressOrders = 0;
+  let completedOrders = 0;
+  let totalSales = 0;
+
+  for (const row of data ?? []) {
+    const status = String(row.status ?? "");
+    const amount = Number(row.total_amount ?? 0);
+    totalOrders += 1;
+
+    if (inProgressStatuses.has(status)) {
+      inProgressOrders += 1;
+    }
+
+    if (completedStatuses.has(status)) {
+      completedOrders += 1;
+      totalSales += amount;
+    }
+  }
+
+  const averageOrderValue =
+    completedOrders > 0 ? totalSales / completedOrders : totalOrders > 0 ? totalSales / totalOrders : 0;
+
   return {
-    totalOrders: Number(data?.total_orders ?? 0),
-    totalSales: Number(data?.total_sales ?? 0),
-    averageOrderValue: Number(data?.average_order_value ?? 0),
-    inProgressOrders: Number(data?.in_progress_orders ?? 0),
+    totalOrders,
+    totalSales: Math.round(totalSales),
+    averageOrderValue: Math.round(averageOrderValue),
+    inProgressOrders,
   };
 };
 
@@ -2175,23 +2191,28 @@ export const getOwnerSalesTrend = async (
     throw new Error(error.message);
   }
 
-  const salesByDay = new Map<string, number>();
+  const salesByDay = new Map<string, { sales: number; orders: number }>();
   for (let i = 0; i < safeRange; i += 1) {
     const day = new Date(startDate);
     day.setDate(startDate.getDate() + i);
     const key = day.toISOString().slice(0, 10);
-    salesByDay.set(key, 0);
+    salesByDay.set(key, { sales: 0, orders: 0 });
   }
 
   for (const row of data ?? []) {
     const dayKey = String(row.placed_at ?? "").slice(0, 10);
     if (!salesByDay.has(dayKey)) continue;
-    salesByDay.set(dayKey, (salesByDay.get(dayKey) ?? 0) + Number(row.total_amount ?? 0));
+    const current = salesByDay.get(dayKey) ?? { sales: 0, orders: 0 };
+    salesByDay.set(dayKey, {
+      sales: current.sales + Number(row.total_amount ?? 0),
+      orders: current.orders + 1,
+    });
   }
 
-  return Array.from(salesByDay.entries()).map(([date, sales]) => ({
+  return Array.from(salesByDay.entries()).map(([date, entry]) => ({
     date,
-    sales: Math.round(sales),
+    sales: Math.round(entry.sales),
+    orders: entry.orders,
   }));
 };
 
@@ -2203,17 +2224,40 @@ export const getOwnerTopSellingItems = async (
   const outlet = await getOutletByBranchCode(branchCode);
 
   const startDate = new Date();
-  startDate.setDate(startDate.getDate() - Math.max(1, rangeDays) + 1);
-  const yyyy = startDate.getFullYear();
-  const mm = String(startDate.getMonth() + 1).padStart(2, "0");
-  const dd = String(startDate.getDate()).padStart(2, "0");
-  const isoDate = `${yyyy}-${mm}-${dd}`;
+  const safeRange = Math.max(1, Math.min(rangeDays, 90));
+  startDate.setDate(startDate.getDate() - safeRange + 1);
+  startDate.setHours(0, 0, 0, 0);
+
+  const { data: orderRows, error: ordersError } = await supabase
+    .from("orders")
+    .select("id,placed_at")
+    .eq("outlet_id", outlet.id)
+    .gte("placed_at", startDate.toISOString())
+    .in("status", ["ready", "served", "completed"]);
+
+  if (ordersError) {
+    throw new Error(ordersError.message);
+  }
+
+  const orderIds = (orderRows ?? [])
+    .map((row) => String(row.id ?? "").trim())
+    .filter(Boolean);
+
+  if (!orderIds.length) {
+    return [];
+  }
+
+  const placedAtByOrderId = new Map<string, string>();
+  for (const order of orderRows ?? []) {
+    const orderId = String(order.id ?? "").trim();
+    if (!orderId) continue;
+    placedAtByOrderId.set(orderId, String(order.placed_at ?? ""));
+  }
 
   const { data, error } = await supabase
-    .from("v_top_selling_items")
-    .select("item_name,quantity_sold,revenue_generated,sessions_ordered_in,sold_date")
-    .eq("outlet_id", outlet.id)
-    .gte("sold_date", isoDate);
+    .from("order_items")
+    .select("order_id,item_name_snapshot,quantity,line_total")
+    .in("order_id", orderIds);
 
   if (error) {
     throw new Error(error.message);
@@ -2225,35 +2269,48 @@ export const getOwnerTopSellingItems = async (
       itemName: string;
       quantitySold: number;
       revenueGenerated: number;
-      sessionsOrderedIn: number;
+      orderIds: Set<string>;
       soldAt: string;
     }
   >();
 
   for (const row of data ?? []) {
-    const key = row.item_name as string;
+    const key = String(row.item_name_snapshot ?? "Item").trim() || "Item";
+    const orderId = String(row.order_id ?? "").trim();
+    const soldAtRaw = placedAtByOrderId.get(orderId) ?? new Date().toISOString();
+    const soldAt = soldAtRaw.slice(0, 10);
     const current =
       aggregate.get(key) ??
       ({
         itemName: key,
         quantitySold: 0,
         revenueGenerated: 0,
-        sessionsOrderedIn: 0,
-        soldAt: row.sold_date as string,
+        orderIds: new Set<string>(),
+        soldAt,
       } as const);
+
+    if (orderId) {
+      current.orderIds.add(orderId);
+    }
 
     aggregate.set(key, {
       itemName: key,
-      quantitySold: current.quantitySold + Number(row.quantity_sold ?? 0),
+      quantitySold: current.quantitySold + Number(row.quantity ?? 0),
       revenueGenerated:
-        current.revenueGenerated + Number(row.revenue_generated ?? 0),
-      sessionsOrderedIn:
-        current.sessionsOrderedIn + Number(row.sessions_ordered_in ?? 0),
-      soldAt: row.sold_date as string,
+        current.revenueGenerated + Number(row.line_total ?? 0),
+      orderIds: current.orderIds,
+      soldAt,
     });
   }
 
   return Array.from(aggregate.values())
+    .map((entry) => ({
+      itemName: entry.itemName,
+      quantitySold: entry.quantitySold,
+      revenueGenerated: entry.revenueGenerated,
+      sessionsOrderedIn: entry.orderIds.size,
+      soldAt: entry.soldAt,
+    }))
     .sort((a, b) => b.revenueGenerated - a.revenueGenerated)
     .slice(0, 20);
 };
@@ -2581,36 +2638,105 @@ const toTitleCaseBranch = (value: string) =>
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join(", ");
 
+type OutletOptionRow = {
+  id: string | null;
+  branch_code: string | null;
+  restaurant_id?: string | null;
+  restaurants: { name?: string | null } | Array<{ name?: string | null }> | null;
+};
+
+const toOutletOption = (row: OutletOptionRow): OutletOption => {
+  const restaurantRelation = Array.isArray(row.restaurants)
+    ? row.restaurants[0]
+    : row.restaurants;
+  const branchCode = String(row.branch_code ?? DEFAULT_BRANCH);
+  return {
+    id: String(row.id),
+    branchCode,
+    branchLabel: toTitleCaseBranch(branchCode),
+    restaurantName: String(restaurantRelation?.name ?? "Sip"),
+  };
+};
+
 export const getOutletOptions = async (): Promise<OutletOption[]> => {
   const supabase = assertSupabaseAdmin();
   const { data, error } = await supabase
     .from("outlets")
-    .select("id,branch_code,restaurants(name)")
+    .select("id,branch_code,restaurant_id,restaurants(name)")
     .order("branch_code", { ascending: true });
 
   if (error) {
     throw new Error(error.message);
   }
 
-  type OutletOptionRow = {
-    id: string | null;
-    branch_code: string | null;
-    restaurants: { name?: string | null } | Array<{ name?: string | null }> | null;
-  };
+  return (data ?? []).map((row) => toOutletOption(row as unknown as OutletOptionRow));
+};
 
-  return (data ?? []).map((row) => {
-    const typedRow = row as unknown as OutletOptionRow;
-    const restaurantRelation = Array.isArray(typedRow.restaurants)
-      ? typedRow.restaurants[0]
-      : typedRow.restaurants;
-    const branchCode = String(typedRow.branch_code ?? DEFAULT_BRANCH);
-    return {
-      id: String(typedRow.id),
-      branchCode,
-      branchLabel: toTitleCaseBranch(branchCode),
-      restaurantName: String(restaurantRelation?.name ?? "Sip"),
-    };
-  });
+export const getOutletOptionsForStaff = async (
+  staffAccess: StaffAccessContext,
+): Promise<OutletOption[]> => {
+  if (staffAccess.highestRole === "admin") {
+    return getOutletOptions();
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const ownerOutletIds = Array.from(
+    new Set(
+      staffAccess.outlets
+        .filter((entry) => entry.role === "owner")
+        .map((entry) => entry.outletId),
+    ),
+  );
+
+  if (ownerOutletIds.length) {
+    const { data: ownedOutletRows, error: ownedOutletError } = await supabase
+      .from("outlets")
+      .select("restaurant_id")
+      .in("id", ownerOutletIds);
+
+    if (ownedOutletError) {
+      throw new Error(ownedOutletError.message);
+    }
+
+    const restaurantIds = Array.from(
+      new Set(
+        (ownedOutletRows ?? [])
+          .map((row) => String(row.restaurant_id ?? "").trim())
+          .filter((value) => Boolean(value)),
+      ),
+    );
+
+    if (restaurantIds.length) {
+      const { data, error } = await supabase
+        .from("outlets")
+        .select("id,branch_code,restaurant_id,restaurants(name)")
+        .in("restaurant_id", restaurantIds)
+        .order("branch_code", { ascending: true });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      return (data ?? []).map((row) => toOutletOption(row as unknown as OutletOptionRow));
+    }
+  }
+
+  const membershipOutletIds = Array.from(new Set(staffAccess.outlets.map((entry) => entry.outletId)));
+  if (!membershipOutletIds.length) {
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("outlets")
+    .select("id,branch_code,restaurant_id,restaurants(name)")
+    .in("id", membershipOutletIds)
+    .order("branch_code", { ascending: true });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? []).map((row) => toOutletOption(row as unknown as OutletOptionRow));
 };
 
 export type AdminEarningsRow = {
@@ -2654,7 +2780,9 @@ const toMonthLabel = (monthKey: string) =>
 
 const roundMoney = (value: number) => Number(value.toFixed(2));
 
-export const getAdminEarnings = async (): Promise<AdminEarningsResponse> => {
+export const getAdminEarnings = async (
+  branchCode?: string,
+): Promise<AdminEarningsResponse> => {
   const supabase = assertSupabaseAdmin();
 
   const now = new Date();
@@ -2669,7 +2797,7 @@ export const getAdminEarnings = async (): Promise<AdminEarningsResponse> => {
 
   const { data: outletRows, error: outletsError } = await supabase
     .from("outlets")
-    .select("id,branch_code,restaurants(name)")
+    .select("id,branch_code,restaurant_id,restaurants(name)")
     .order("branch_code", { ascending: true });
 
   if (outletsError) {
@@ -2679,12 +2807,14 @@ export const getAdminEarnings = async (): Promise<AdminEarningsResponse> => {
   type AdminOutletRow = {
     id: string | null;
     branch_code: string | null;
+    restaurant_id: string | null;
     restaurants: { name?: string | null } | Array<{ name?: string | null }> | null;
   };
 
   const outletLookup = new Map<
     string,
     {
+      restaurantId: string;
       restaurantName: string;
       branchCode: string;
       branchLabel: string;
@@ -2698,12 +2828,29 @@ export const getAdminEarnings = async (): Promise<AdminEarningsResponse> => {
     const restaurantRelation = Array.isArray(typedRow.restaurants)
       ? typedRow.restaurants[0]
       : typedRow.restaurants;
+    const restaurantId = String(typedRow.restaurant_id ?? "").trim();
     const branchCode = String(typedRow.branch_code ?? DEFAULT_BRANCH);
     outletLookup.set(outletId, {
+      restaurantId,
       restaurantName: String(restaurantRelation?.name ?? "Sip"),
       branchCode,
       branchLabel: toTitleCaseBranch(branchCode),
     });
+  }
+
+  const normalizedBranchCode = String(branchCode ?? "").trim().toLowerCase();
+  if (normalizedBranchCode) {
+    const selectedOutletMeta = Array.from(outletLookup.values()).find(
+      (entry) => entry.branchCode.toLowerCase() === normalizedBranchCode,
+    );
+
+    if (selectedOutletMeta?.restaurantId) {
+      for (const [outletId, outletMeta] of Array.from(outletLookup.entries())) {
+        if (outletMeta.restaurantId !== selectedOutletMeta.restaurantId) {
+          outletLookup.delete(outletId);
+        }
+      }
+    }
   }
 
   const outletIds = Array.from(outletLookup.keys());
@@ -2875,16 +3022,34 @@ export const getOwnerMenuInsights = async (
 
   const { data: orderRows, error: ordersError } = await supabase
     .from("orders")
-    .select("id")
+    .select("id,order_items(order_id,menu_item_id,item_name_snapshot,quantity,line_total)")
     .eq("outlet_id", outlet.id)
-    .gte("placed_at", start);
+    .gte("placed_at", start)
+    .in("status", ["ready", "served", "completed"]);
 
   if (ordersError) {
     throw new Error(ordersError.message);
   }
 
-  const orderIds = (orderRows ?? []).map((row) => String(row.id));
-  if (!orderIds.length) {
+  type MenuInsightOrderItemRow = {
+    order_id: string | null;
+    menu_item_id: string | null;
+    item_name_snapshot: string | null;
+    quantity: number | null;
+    line_total: number | null;
+  };
+
+  type MenuInsightOrderRow = {
+    id: string | null;
+    order_items: MenuInsightOrderItemRow[] | null;
+  };
+
+  const allOrderItems = (orderRows ?? []).flatMap((row) => {
+    const typedRow = row as unknown as MenuInsightOrderRow;
+    return Array.isArray(typedRow.order_items) ? typedRow.order_items : [];
+  });
+
+  if (!allOrderItems.length) {
     return {
       categories: [],
       totalItemsSold: 0,
@@ -2894,18 +3059,9 @@ export const getOwnerMenuInsights = async (
     };
   }
 
-  const { data: rawItems, error: itemsError } = await supabase
-    .from("order_items")
-    .select("order_id,menu_item_id,item_name_snapshot,quantity,line_total")
-    .in("order_id", orderIds);
-
-  if (itemsError) {
-    throw new Error(itemsError.message);
-  }
-
   const menuIds = Array.from(
     new Set(
-      (rawItems ?? [])
+      allOrderItems
         .map((row) =>
           row.menu_item_id === null || row.menu_item_id === undefined
             ? null
@@ -2958,7 +3114,7 @@ export const getOwnerMenuInsights = async (
     }
   >();
 
-  for (const row of rawItems ?? []) {
+  for (const row of allOrderItems) {
     const menuMeta =
       row.menu_item_id !== null && row.menu_item_id !== undefined
         ? menuLookup.get(String(row.menu_item_id))
@@ -3402,10 +3558,101 @@ export type AdminQrCodeRecord = {
   tableNumber: number;
   tableLabel: string;
   qrType: "table" | "takeaway";
+  targetUrl: string;
   createdAt: string;
 };
 
 const TAKEAWAY_TABLE_NUMBER_BASE = 9000;
+const outletMenuRouteCache = new Map<
+  string,
+  { menuBasePath: string; branchCode: string }
+>();
+
+const toPublicRestaurantSegment = (
+  slug: string | null | undefined,
+  name: string | null | undefined,
+  branchCode?: string | null | undefined,
+) => {
+  const normalizedBranchCode = String(branchCode ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalizedBranchCode.startsWith("karo")) {
+    return "karo";
+  }
+  if (normalizedBranchCode.startsWith("sip")) {
+    return "sip";
+  }
+
+  const fromSlug = String(slug ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "");
+  if (fromSlug) {
+    const [firstSegment] = fromSlug.split("-");
+    if (firstSegment) {
+      return firstSegment;
+    }
+  }
+
+  const fromName = String(name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (fromName) {
+    const [firstSegment] = fromName.split("-");
+    if (firstSegment) {
+      return firstSegment;
+    }
+  }
+  return "sip";
+};
+
+const getMenuRouteForOutletId = async (outletId: string) => {
+  const cached = outletMenuRouteCache.get(outletId);
+  if (cached) {
+    return cached;
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("outlets")
+    .select("id,branch_code,restaurant_id")
+    .eq("id", outletId)
+    .single<{
+      id: string;
+      branch_code: string;
+      restaurant_id: string | null;
+    }>();
+  if (error || !data) {
+    throw new Error(error?.message ?? "Unable to resolve outlet route");
+  }
+
+  let restaurantSlug: string | null = null;
+  let restaurantName: string | null = null;
+  if (data.restaurant_id) {
+    const restaurantLookup = await supabase
+      .from("restaurants")
+      .select("slug,name")
+      .eq("id", data.restaurant_id)
+      .maybeSingle<{ slug: string | null; name: string | null }>();
+    if (!restaurantLookup.error && restaurantLookup.data) {
+      restaurantSlug = restaurantLookup.data.slug;
+      restaurantName = restaurantLookup.data.name;
+    }
+  }
+  const segment = toPublicRestaurantSegment(
+    restaurantSlug,
+    restaurantName,
+    data.branch_code,
+  );
+  const route = {
+    menuBasePath: `/${segment}/menu`,
+    branchCode: String(data.branch_code ?? DEFAULT_BRANCH),
+  };
+  outletMenuRouteCache.set(outletId, route);
+  return route;
+};
 
 const buildQrTableParam = (tableNumber: number, tableLabel?: string | null) => {
   const rawLabel = String(tableLabel ?? '').trim();
@@ -3418,8 +3665,20 @@ const buildQrTableParam = (tableNumber: number, tableLabel?: string | null) => {
   return `Table${tableNumber}`;
 };
 
-const buildQrTargetUrl = (tableNumber: number, tableLabel?: string | null) =>
-  `/sip/menu?table=${encodeURIComponent(buildQrTableParam(tableNumber, tableLabel))}`;
+const buildQrTargetUrl = (
+  route: { menuBasePath: string; branchCode: string },
+  tableNumber: number,
+  tableLabel?: string | null,
+) => {
+  const restaurantSegment =
+    route.menuBasePath.match(/^\/([^/]+)\/menu$/)?.[1] ?? "sip";
+  const params = new URLSearchParams({
+    table: buildQrTableParam(tableNumber, tableLabel),
+    branchCode: route.branchCode,
+    restaurant: restaurantSegment,
+  });
+  return `${route.menuBasePath}?${params.toString()}`;
+};
 
 const ensureTableForOutlet = async (
   outletId: string,
@@ -3523,7 +3782,8 @@ const ensureQrRowForTable = async (
   tableLabel?: string | null,
 ) => {
   const supabase = assertSupabaseAdmin();
-  const targetUrl = buildQrTargetUrl(tableNumber, tableLabel);
+  const route = await getMenuRouteForOutletId(outletId);
+  const targetUrl = buildQrTargetUrl(route, tableNumber, tableLabel);
 
   const existing = await supabase
     .from("table_qr_codes")
@@ -3605,6 +3865,7 @@ export const getAdminQrCodes = async (
 ): Promise<AdminQrCodeRecord[]> => {
   const supabase = assertSupabaseAdmin();
   const outlet = await getOutletByBranchCode(branchCode);
+  const menuRoute = await getMenuRouteForOutletId(outlet.id);
 
   const { data: tables, error: tablesError } = await supabase
     .from("restaurant_tables")
@@ -3659,6 +3920,7 @@ export const getAdminQrCodes = async (
         tableNumber,
         tableLabel,
         qrType,
+        targetUrl: buildQrTargetUrl(menuRoute, tableNumber, tableLabel),
         createdAt: String(
           typedRow.created_at ?? typedRow.updated_at ?? new Date().toISOString(),
         ),

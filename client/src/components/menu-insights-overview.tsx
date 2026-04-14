@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { fetchOwnerMenuInsights } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -25,7 +26,11 @@ type DateRangeFilter = "today" | "this-week" | "this-month"
 const formatCurrency = (value: number) =>
   `Rs. ${value.toLocaleString("en-PK", { maximumFractionDigits: 0 })}`
 
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
+
 export function MenuInsightsOverview() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const [dateRange, setDateRange] = React.useState<DateRangeFilter>("today")
   const [category, setCategory] = React.useState("all")
   const [isLoading, setIsLoading] = React.useState(true)
@@ -55,7 +60,7 @@ export function MenuInsightsOverview() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerMenuInsights(undefined, dateRange, category)
+        const response = await fetchOwnerMenuInsights(activeBranchCode, dateRange, category)
         if (!cancelled) {
           setCategories(response.categories)
           setPayload({
@@ -77,6 +82,7 @@ export function MenuInsightsOverview() {
       }
     }
 
+    setIsLoading(true)
     void load()
     const timer = window.setInterval(() => {
       void load()
@@ -93,7 +99,7 @@ export function MenuInsightsOverview() {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [dateRange, category])
+  }, [activeBranchCode, dateRange, category])
 
   return (
     <div className="space-y-4">

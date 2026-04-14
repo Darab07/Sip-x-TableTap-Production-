@@ -19,7 +19,7 @@
     icon: payload.icon || "/logo.png",
     badge: payload.badge || "/logo.png",
     tag: payload.tag || "order-status",
-    data: payload.data || { url: "/sip/menu" },
+    data: payload.data || { url: "/menu" },
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -28,7 +28,7 @@
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification?.data?.url || "/sip/menu";
+  const targetUrl = event.notification?.data?.url || "/menu";
 
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {

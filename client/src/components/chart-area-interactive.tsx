@@ -22,7 +22,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { fetchOwnerSalesTrend } from "@/lib/tabletap-supabase-api"
+import { fetchOwnerOrdersTrend, fetchOwnerSalesTrend } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
 
 const chartConfig = {
   sales: {
@@ -35,9 +39,12 @@ const formatCurrency = (value: number) =>
   `Rs. ${value.toLocaleString("en-PK", { maximumFractionDigits: 0 })}`
 
 export function ChartAreaInteractive() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const [timeRange, setTimeRange] = React.useState("30d")
   const [isLoading, setIsLoading] = React.useState(true)
-  const [remoteTrend, setRemoteTrend] = React.useState<Array<{ date: string; sales: number }>>([])
+  const [remoteTrend, setRemoteTrend] = React.useState<
+    Array<{ date: string; sales: number; orders: number }>
+  >([])
 
   React.useEffect(() => {
     let cancelled = false
@@ -49,13 +56,29 @@ export function ChartAreaInteractive() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerSalesTrend(undefined, rangeDays)
+        const [salesResponse, ordersResponse] = await Promise.all([
+          fetchOwnerSalesTrend(activeBranchCode, rangeDays),
+          fetchOwnerOrdersTrend("day", activeBranchCode, rangeDays),
+        ])
         if (cancelled) return
+        const ordersByLabel = new Map(
+          ordersResponse.points.map((point) => [point.label, point.orders]),
+        )
         setRemoteTrend(
-          response.points.map((point) => ({
-            date: point.date,
-            sales: point.sales,
-          }))
+          salesResponse.points.map((point) => {
+            const label = new Date(point.date).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })
+            return {
+              date: point.date,
+              sales: point.sales,
+              orders:
+                typeof point.orders === "number"
+                  ? point.orders
+                  : Number(ordersByLabel.get(label) ?? 0),
+            }
+          }),
         )
       } catch (error) {
         if (!cancelled) {
@@ -69,6 +92,7 @@ export function ChartAreaInteractive() {
       }
     }
 
+    setIsLoading(true)
     void load()
     const timer = window.setInterval(() => {
       void load()
@@ -85,7 +109,7 @@ export function ChartAreaInteractive() {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [timeRange])
+  }, [activeBranchCode, timeRange])
 
   const filteredData = React.useMemo(() => {
     const source = remoteTrend
@@ -225,7 +249,20 @@ export function ChartAreaInteractive() {
                         day: "numeric",
                       })
                     }
-                    formatter={(value) => formatCurrency(Number(value))}
+                    formatter={(value, _name, item) => {
+                      const payload = item?.payload as
+                        | { orders?: number }
+                        | undefined
+                      const orders = Number(payload?.orders ?? 0)
+                      return (
+                        <div className="grid gap-0.5 leading-tight">
+                          <span className="font-medium text-foreground">
+                            Sales: {formatCurrency(Number(value))}
+                          </span>
+                          <span className="text-muted-foreground">{orders} orders</span>
+                        </div>
+                      )
+                    }}
                     indicator="dot"
                   />
                 }

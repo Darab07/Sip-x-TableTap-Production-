@@ -5,6 +5,10 @@ import { TableManagementCards } from "@/components/table-management-cards";
 import { TableManagementOverview } from "@/components/table-management-overview";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { fetchOwnerTableManagement } from "@/lib/tabletap-supabase-api";
+import { useActiveBranchCode } from "@/lib/active-branch";
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
 type RestaurantTableManagementProps = {
   dashboardRole?: "owner" | "manager" | "admin";
@@ -13,6 +17,7 @@ type RestaurantTableManagementProps = {
 export default function RestaurantTableManagement({
   dashboardRole,
 }: RestaurantTableManagementProps) {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE);
   const [snapshot, setSnapshot] = React.useState<{
     cards: {
       totalTables: number;
@@ -48,7 +53,7 @@ export default function RestaurantTableManagement({
       if (typeof document !== "undefined" && document.hidden) return;
       inFlight = true;
       try {
-        const data = await fetchOwnerTableManagement();
+        const data = await fetchOwnerTableManagement(activeBranchCode);
         if (!cancelled) {
           setSnapshot(data);
         }
@@ -77,7 +82,7 @@ export default function RestaurantTableManagement({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [activeBranchCode]);
 
   return (
     <SidebarProvider

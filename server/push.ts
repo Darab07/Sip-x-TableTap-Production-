@@ -16,6 +16,7 @@ interface OrderPushInput {
   userId: string;
   orderNumber: string;
   tableLabel: string;
+  menuUrl?: string;
 }
 
 interface PushNotificationPayload {
@@ -53,7 +54,10 @@ if (!configuredPublicKey || !configuredPrivateKey) {
 webpush.setVapidDetails(vapidSubject, vapidKeys.publicKey, vapidKeys.privateKey);
 
 const userSubscriptions = new Map<string, Map<string, PushSubscriptionPayload>>();
-const orderWatchers = new Map<string, { userId: string; tableLabel: string }>();
+const orderWatchers = new Map<
+  string,
+  { userId: string; tableLabel: string; menuUrl: string }
+>();
 
 const normalizeOrderStatus = (status: string): OrderStatus | null => {
   const normalized = String(status || "").trim().toLowerCase();
@@ -100,6 +104,7 @@ const buildPayload = (
   status: OrderStatus,
   orderNumber: string,
   tableLabel: string,
+  menuUrl?: string,
 ): PushNotificationPayload => {
   const copy = getStatusCopy(status, orderNumber, tableLabel);
   return {
@@ -109,7 +114,7 @@ const buildPayload = (
     icon: "/logo.png",
     badge: "/logo.png",
     data: {
-      url: "/sip/menu",
+      url: String(menuUrl || "/menu"),
       orderNumber,
       status,
     },
@@ -160,6 +165,7 @@ export const pushOrderStatus = async (
   orderNumber: string,
   tableLabel: string,
   status: OrderStatus,
+  menuUrl?: string,
 ) => {
   const normalizedUserId = String(userId || "").trim();
   const existing = userSubscriptions.get(normalizedUserId);
@@ -167,7 +173,7 @@ export const pushOrderStatus = async (
     return;
   }
 
-  const payload = buildPayload(status, orderNumber, tableLabel);
+  const payload = buildPayload(status, orderNumber, tableLabel, menuUrl);
   const subscriptions = Array.from(existing.values());
 
   await Promise.all(
@@ -189,7 +195,12 @@ export const cancelOrderPushTracking = (orderNumber: string) => {
   orderWatchers.delete(orderNumber);
 };
 
-export const startOrderPushTracking = async ({ userId, orderNumber, tableLabel }: OrderPushInput) => {
+export const startOrderPushTracking = async ({
+  userId,
+  orderNumber,
+  tableLabel,
+  menuUrl,
+}: OrderPushInput) => {
   const normalizedUserId = String(userId || "").trim();
   const normalizedOrderNumber = String(orderNumber || "").trim();
   if (!normalizedUserId || !normalizedOrderNumber) {
@@ -199,9 +210,16 @@ export const startOrderPushTracking = async ({ userId, orderNumber, tableLabel }
   orderWatchers.set(normalizedOrderNumber, {
     userId: normalizedUserId,
     tableLabel: String(tableLabel || "Table").trim() || "Table",
+    menuUrl: String(menuUrl || "/menu"),
   });
 
-  await pushOrderStatus(normalizedUserId, normalizedOrderNumber, tableLabel, "placed");
+  await pushOrderStatus(
+    normalizedUserId,
+    normalizedOrderNumber,
+    tableLabel,
+    "placed",
+    menuUrl,
+  );
 };
 
 export const notifyTrackedOrderStatus = async (orderNumber: string, status: string) => {
@@ -225,6 +243,7 @@ export const notifyTrackedOrderStatus = async (orderNumber: string, status: stri
     normalizedOrderNumber,
     watcher.tableLabel,
     normalizedStatus,
+    watcher.menuUrl,
   );
 
   if (normalizedStatus === "served") {

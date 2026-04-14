@@ -1,11 +1,25 @@
 import { supabaseBrowser } from "./supabase";
+import {
+  getActiveBranchCode,
+  setActiveBranchCode as persistActiveBranchCode,
+} from "./active-branch";
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
   "/api";
 
-const DEFAULT_BRANCH_CODE =
+const ENV_DEFAULT_BRANCH_CODE =
   String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
+let DEFAULT_BRANCH_CODE = getActiveBranchCode(ENV_DEFAULT_BRANCH_CODE);
+
+export const getApiDefaultBranchCode = () => DEFAULT_BRANCH_CODE;
+
+export const setApiDefaultBranchCode = (branchCode: string) => {
+  const normalized = String(branchCode ?? "").trim().toLowerCase();
+  if (!normalized) return;
+  DEFAULT_BRANCH_CODE = normalized;
+  persistActiveBranchCode(normalized);
+};
 
 type ApiFetchInit = RequestInit & {
   authToken?: string;
@@ -426,8 +440,11 @@ export const fetchOwnerCards = async (branchCode = DEFAULT_BRANCH_CODE) => {
   }>(res);
 };
 
-export const fetchAdminEarnings = async () => {
-  const res = await apiFetch(`${API_BASE}/dashboard/admin/earnings`);
+export const fetchAdminEarnings = async (branchCode = DEFAULT_BRANCH_CODE) => {
+  const params = new URLSearchParams({
+    branchCode,
+  });
+  const res = await apiFetch(`${API_BASE}/dashboard/admin/earnings?${params.toString()}`);
   return readJson<{
     summary: {
       thisMonthSales: number;
@@ -461,7 +478,7 @@ export const fetchOwnerSalesTrend = async (
       branchCode,
     )}&rangeDays=${rangeDays}`,
   );
-  return readJson<{ points: Array<{ date: string; sales: number }> }>(res);
+  return readJson<{ points: Array<{ date: string; sales: number; orders: number }> }>(res);
 };
 
 export const fetchOwnerTopItems = async (
@@ -725,6 +742,7 @@ export const fetchAdminQrCodes = async (branchCode = DEFAULT_BRANCH_CODE) => {
       tableNumber: number;
       tableLabel: string;
       qrType: "table" | "takeaway";
+      targetUrl: string;
       createdAt: string;
     }>;
   }>(res);
@@ -745,6 +763,7 @@ export const createAdminQrCodeApi = async (
       tableNumber: number;
       tableLabel: string;
       qrType: "table" | "takeaway";
+      targetUrl: string;
       createdAt: string;
     }>;
   }>(res);
@@ -763,6 +782,7 @@ export const createAdminTakeawayQrCodeApi = async (
       tableNumber: number;
       tableLabel: string;
       qrType: "table" | "takeaway";
+      targetUrl: string;
       createdAt: string;
     }>;
     created: {
@@ -770,6 +790,7 @@ export const createAdminTakeawayQrCodeApi = async (
       tableNumber: number;
       tableLabel: string;
       qrType: "table" | "takeaway";
+      targetUrl: string;
       createdAt: string;
     } | null;
   }>(res);

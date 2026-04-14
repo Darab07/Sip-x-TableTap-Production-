@@ -129,6 +129,7 @@ export const ensurePushSubscription = async () => {
 export const startServerOrderPushTracking = async (input: {
   orderNumber: string;
   tableLabel: string;
+  menuUrl?: string;
 }) => {
   const authHeader = await getAuthHeader();
   const res = await fetch(`${API_BASE}/orders/track/start`, {

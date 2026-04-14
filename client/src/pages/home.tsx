@@ -20,7 +20,7 @@ export default function Home() {
   const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
 
   const handleOrderNow = () => {
-    setLocation(`/sip/menu${tableQuery}`); // Use dynamic table identifier
+    setLocation(`/menu${tableQuery}`); // Use dynamic table identifier
   };
 
   return (

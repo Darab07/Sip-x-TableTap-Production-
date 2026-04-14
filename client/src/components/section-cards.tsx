@@ -11,8 +11,13 @@ import {
 } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchOwnerCards } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
 
 export function SectionCards() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const [isLoading, setIsLoading] = React.useState(true)
   const [cards, setCards] = React.useState({
     totalSales: 1250000,
@@ -23,7 +28,8 @@ export function SectionCards() {
 
   React.useEffect(() => {
     let mounted = true
-    fetchOwnerCards()
+    setIsLoading(true)
+    fetchOwnerCards(activeBranchCode)
       .then((data) => {
         if (!mounted) return
         setCards({
@@ -44,7 +50,7 @@ export function SectionCards() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [activeBranchCode])
 
   return (
     <div className="*:data-[slot=card]:shadow-xs grid grid-cols-1 gap-4 md:grid-cols-3 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card dark:*:data-[slot=card]:bg-card">

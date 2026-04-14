@@ -29,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { supabaseBrowser } from "@/lib/supabase";
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth";
+import { useActiveBranchCode } from "@/lib/active-branch";
 import {
   Table,
   TableBody,
@@ -43,20 +44,19 @@ type QrCodeRecord = {
   tableNumber: number;
   tableLabel: string;
   qrType: "table" | "takeaway";
+  targetUrl: string;
   createdAt: string;
 };
 
-const TAKEAWAY_TABLE_NUMBER_BASE = 9000;
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
-const buildTableUrl = (tableNumber: number, qrType: "table" | "takeaway" = "table") => {
-  const tableParam =
-    qrType === "takeaway"
-      ? `Takeaway${Math.max(1, Number(tableNumber) - TAKEAWAY_TABLE_NUMBER_BASE + 1)}`
-      : `Table${tableNumber}`;
-  if (typeof window === "undefined") {
-    return `/sip/menu?table=${encodeURIComponent(tableParam)}`;
-  }
-  return `${window.location.origin}/sip/menu?table=${encodeURIComponent(tableParam)}`;
+const normalizeTargetUrl = (targetUrl: string) => {
+  const normalized = String(targetUrl ?? "").trim();
+  if (!normalized) return "";
+  if (/^https?:\/\//i.test(normalized)) return normalized;
+  if (typeof window === "undefined") return normalized;
+  return `${window.location.origin}${normalized.startsWith("/") ? normalized : `/${normalized}`}`;
 };
 
 const createQrImageUrl = (url: string, size = 280) =>
@@ -73,6 +73,7 @@ const formatTimestamp = (value: string) =>
   });
 
 export default function RestaurantAdminQrManagement() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE);
   const [, setLocation] = useLocation();
   const [tableInput, setTableInput] = React.useState("");
   const [statusMessage, setStatusMessage] = React.useState("");
@@ -118,7 +119,7 @@ export default function RestaurantAdminQrManagement() {
 
       inFlight = true;
       try {
-        const response = await fetchAdminQrCodes();
+        const response = await fetchAdminQrCodes(activeBranchCode);
         if (!cancelled) {
           setQrCodes(response.rows);
         }
@@ -155,7 +156,7 @@ export default function RestaurantAdminQrManagement() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [activeBranchCode, setLocation]);
 
   React.useEffect(() => {
     if (!qrCodes.length) {
@@ -171,7 +172,7 @@ export default function RestaurantAdminQrManagement() {
     qrCodes.find((entry) => entry.id === selectedId) ?? qrCodes[0] ?? null;
 
   const selectedQrUrl = selectedQr
-    ? buildTableUrl(selectedQr.tableNumber, selectedQr.qrType)
+    ? normalizeTargetUrl(selectedQr.targetUrl)
     : null;
 
   const handleCreateOrUpdate = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -188,7 +189,7 @@ export default function RestaurantAdminQrManagement() {
 
     try {
       const existingId = qrCodes.find((entry) => entry.tableNumber === parsed)?.id;
-      const response = await createAdminQrCodeApi(parsed);
+      const response = await createAdminQrCodeApi(parsed, activeBranchCode);
       setQrCodes(response.rows);
       const selected = response.rows.find((entry) => entry.tableNumber === parsed);
       setSelectedId(selected?.id ?? existingId ?? null);
@@ -214,7 +215,7 @@ export default function RestaurantAdminQrManagement() {
     }
 
     try {
-      const response = await createAdminTakeawayQrCodeApi();
+      const response = await createAdminTakeawayQrCodeApi(activeBranchCode);
       setQrCodes(response.rows);
       if (response.created?.id) {
         setSelectedId(response.created.id);
@@ -320,7 +321,7 @@ export default function RestaurantAdminQrManagement() {
                       <p className="text-sm text-muted-foreground">{statusMessage}</p>
                     ) : null}
                     <p className="text-sm text-muted-foreground">
-                      Example URL: <span className="font-medium">/sip/menu?table=Table3</span>. Takeaway links are generated automatically.
+                      Example URL: <span className="font-medium">/karo/menu?table=Table3&amp;branchCode=karo-dha-phase-7</span>. Takeaway links are generated automatically.
                     </p>
                   </CardContent>
                 </Card>
@@ -413,7 +414,7 @@ export default function RestaurantAdminQrManagement() {
                         </TableRow>
                       ) : qrCodes.length ? (
                         qrCodes.map((entry) => {
-                          const url = buildTableUrl(entry.tableNumber, entry.qrType);
+                          const url = normalizeTargetUrl(entry.targetUrl);
                           return (
                             <TableRow
                               key={entry.id}
@@ -501,7 +502,7 @@ export default function RestaurantAdminQrManagement() {
                 <CardContent className="space-y-2 text-sm text-muted-foreground">
                   <p>1. Create a QR for a table number (for example, table 3).</p>
                   <p>2. Print and place that QR on the matching table.</p>
-                  <p>3. When scanned, guests open: /sip/menu?table=Table3.</p>
+                  <p>3. When scanned, guests open the row-specific `targetUrl` for that outlet (for example `/sip/menu?...` or `/karo/menu?...`).</p>
                 </CardContent>
               </Card>
             </div>

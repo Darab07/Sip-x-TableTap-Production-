@@ -3,6 +3,10 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { fetchOwnerOrdersSummary } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
 
 const formatSignedPercent = (value: number) => {
   const sign = value > 0 ? "+" : ""
@@ -10,6 +14,7 @@ const formatSignedPercent = (value: number) => {
 }
 
 export function OrdersCards() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const [isLoading, setIsLoading] = React.useState(true)
   const [summary, setSummary] = React.useState<{
     totalOrdersToday: number
@@ -31,7 +36,7 @@ export function OrdersCards() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const data = await fetchOwnerOrdersSummary()
+        const data = await fetchOwnerOrdersSummary(activeBranchCode)
         if (!cancelled) {
           setSummary(data)
         }
@@ -47,6 +52,7 @@ export function OrdersCards() {
       }
     }
 
+    setIsLoading(true)
     void load()
     const timer = window.setInterval(() => {
       void load()
@@ -63,7 +69,7 @@ export function OrdersCards() {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [])
+  }, [activeBranchCode])
 
   const totalOrders = summary?.totalOrdersToday ?? 0
   const totalOrdersDelta = summary?.totalOrdersDeltaPercent ?? 0

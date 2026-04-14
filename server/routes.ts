@@ -1,9 +1,11 @@
 import { Router, type Express, type RequestHandler } from "express";
+import { z } from "zod";
 import { createServer, type Server } from "http";
 import { randomUUID } from "crypto";
 import { insertUserSchema } from "../shared/schema.js";
 import { storage } from "./storage.js";
 import { HttpError } from "./errors.js";
+import { applyValidation, strictObject } from "./security.js";
 import {
   getStaffAccessFromRequest,
   requireAuthenticatedUser,
@@ -29,7 +31,7 @@ import {
   checkInTableFromQr,
   getOrderTrackerStatusForCustomer,
   getPublicTableAccess,
-  getOutletOptions,
+  getOutletOptionsForStaff,
   getOutletOrderingSettingsForBranch,
   updateOutletOrderingSettingsForBranch,
   getOwnerMenuInsights,
@@ -87,6 +89,284 @@ const pruneWaiterCalls = (now = Date.now()) => {
   }
 };
 
+
+const branchCodeSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(64)
+  .regex(/^[a-z0-9][a-z0-9-_]*$/i, "branchCode format is invalid");
+
+const orderNumberSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(64)
+  .regex(/^[A-Za-z0-9-]+$/, "orderNumber format is invalid");
+
+const tableNumberSchema = z.coerce.number().int().min(1).max(99999);
+
+const timeValueSchema = z
+  .string()
+  .trim()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, "time must be HH:MM or HH:MM:SS");
+
+const timezoneSchema = z
+  .string()
+  .trim()
+  .min(2)
+  .max(64)
+  .regex(/^[A-Za-z_]+(?:\/[A-Za-z0-9_+\-]+)*$/, "timezone format is invalid");
+
+const menuCatalogQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  ts: z.string().trim().max(40).optional(),
+});
+
+const publicTableAccessQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  tableNumber: tableNumberSchema,
+});
+
+const checkInBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  tableNumber: tableNumberSchema,
+});
+
+const waiterCallBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  tableNumber: tableNumberSchema,
+  tableLabel: z.string().trim().min(1).max(80).optional(),
+});
+
+const waiterCallsQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  since: z.coerce.number().int().min(0).optional(),
+});
+
+const placeOrderBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  tableNumber: tableNumberSchema,
+  deviceFingerprint: z.string().trim().min(8).max(256),
+  customerAuthUserId: z.string().trim().min(1).max(128).optional(),
+  customerName: z.string().trim().min(1).max(80).optional(),
+  customerEmail: z.string().trim().toLowerCase().email().max(254).optional(),
+  notes: z.string().trim().max(500).optional(),
+  tipAmount: z.coerce.number().finite().min(0).max(1_000_000).optional(),
+  serviceFee: z.coerce.number().finite().min(0).max(1_000_000).optional(),
+  gstAmount: z.coerce.number().finite().min(0).max(1_000_000).optional(),
+  subtotal: z.coerce.number().finite().min(0).max(5_000_000).optional(),
+  total: z.coerce.number().finite().min(0).max(5_000_000).optional(),
+  items: z
+    .array(
+      strictObject({
+        menuItemId: z.string().trim().uuid().optional(),
+        name: z.string().trim().min(1).max(120),
+        quantity: z.coerce.number().int().min(1).max(100),
+        unitPrice: z.coerce.number().finite().min(0).max(1_000_000).optional(),
+        details: z.string().trim().max(500).optional(),
+        options: z
+          .array(
+            strictObject({
+              groupName: z.string().trim().min(1).max(80),
+              label: z.string().trim().min(1).max(80),
+              priceDelta: z.coerce.number().finite().min(-1_000_000).max(1_000_000).optional(),
+              priceOverride: z.union([z.coerce.number().finite().min(0).max(1_000_000), z.null()]).optional(),
+            }),
+          )
+          .max(20)
+          .optional(),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+
+const customerHistoryQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  authUserId: z.string().trim().min(1).max(128).optional(),
+  deviceFingerprint: z.string().trim().min(8).max(256).optional(),
+  customerEmail: z.string().trim().toLowerCase().email().max(254).optional(),
+});
+
+const loyaltySummaryQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+});
+
+const customerProfileBodySchema = strictObject({
+  deviceFingerprint: z.string().trim().min(8).max(256),
+  name: z.string().trim().min(1).max(80),
+  email: z.string().trim().toLowerCase().email().max(254).optional(),
+});
+
+const branchCodeOnlyQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+});
+
+const adminEarningsQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+});
+
+const outletOrderingSettingsBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  serviceStartTime: timeValueSchema,
+  serviceEndTime: timeValueSchema,
+  lastTakeawayTime: timeValueSchema,
+  timezone: timezoneSchema.optional(),
+});
+
+const managerMenuItemParamsSchema = strictObject({
+  itemId: z.string().trim().uuid(),
+});
+
+const managerMenuItemPatchBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  price: z.coerce.number().finite().min(0).max(1_000_000).optional(),
+  available: z.boolean().optional(),
+}).refine((value) => value.price !== undefined || value.available !== undefined, {
+  message: "Either price or available must be provided",
+});
+
+const managerTableParamsSchema = strictObject({
+  tableId: z.string().trim().uuid(),
+});
+
+const managerTableAvailabilityBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  availability: z.enum(["available", "unavailable"]),
+});
+
+const managerOrderStatusParamsSchema = strictObject({
+  orderNumber: orderNumberSchema,
+});
+
+const managerOrderStatusBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  status: z.enum(["accepted", "preparing", "ready"]),
+});
+
+const orderStatusParamsSchema = strictObject({
+  orderNumber: orderNumberSchema,
+});
+
+const orderStatusQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  deviceFingerprint: z.string().trim().min(8).max(256).optional(),
+});
+
+const adminQrCreateBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  tableNumber: tableNumberSchema,
+});
+
+const adminTakeawayQrBodySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+});
+
+const adminQrDeleteParamsSchema = strictObject({
+  id: z.string().trim().uuid(),
+});
+
+const ownerSalesTrendQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  rangeDays: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+const ownerRangeDaysQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  rangeDays: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+const ownerOrdersTrendQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  mode: z.enum(["day", "hour"]).optional(),
+  rangeDays: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+const ownerMenuInsightsQuerySchema = strictObject({
+  branchCode: branchCodeSchema.optional(),
+  dateRange: z.enum(["today", "this-week", "this-month"]).optional(),
+  category: z.string().trim().min(1).max(80).optional(),
+});
+
+const pushSubscribeBodySchema = strictObject({
+  subscription: strictObject({
+    endpoint: z.string().trim().url().max(2_000),
+    expirationTime: z.number().nullable().optional(),
+    keys: strictObject({
+      auth: z.string().trim().min(8).max(500),
+      p256dh: z.string().trim().min(8).max(500),
+    }),
+  }),
+});
+
+const pushUnsubscribeBodySchema = strictObject({
+  endpoint: z.string().trim().url().max(2_000),
+});
+
+const orderTrackStartBodySchema = strictObject({
+  orderNumber: orderNumberSchema,
+  tableLabel: z.string().trim().min(1).max(80),
+  menuUrl: z.string().trim().min(1).max(300).optional(),
+});
+
+const usersParamsSchema = strictObject({
+  username: z.string().trim().min(3).max(64).regex(/^[A-Za-z0-9_.-]+$/),
+});
+
+const tableSessionAttachBodySchema = strictObject({
+  tableId: z.string().trim().uuid(),
+  deviceFingerprint: z.string().trim().min(8).max(256),
+});
+
+const addItemBodySchema = strictObject({
+  tableSessionId: z.string().trim().uuid(),
+  personId: z.string().trim().uuid(),
+  items: z
+    .array(
+      strictObject({
+        menuItemId: z.string().trim().uuid(),
+        qty: z.coerce.number().int().min(1).max(100),
+        price: z.coerce.number().finite().min(0).max(1_000_000),
+        notes: z.string().trim().max(300).optional(),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+
+const removeItemBodySchema = strictObject({
+  tableSessionId: z.string().trim().uuid(),
+  personId: z.string().trim().uuid(),
+  menuItemId: z.string().trim().uuid(),
+});
+
+const groupOrderCreateBodySchema = strictObject({
+  tableSessionId: z.string().trim().uuid(),
+  personId: z.string().trim().uuid(),
+});
+
+const groupOrderParamsSchema = strictObject({
+  groupOrderId: z.string().trim().uuid(),
+});
+
+const groupOrderJoinBodySchema = strictObject({
+  personId: z.string().trim().uuid(),
+});
+
+const tableSessionParamsSchema = strictObject({
+  tableSessionId: z.string().trim().uuid(),
+});
+
+const tableSessionStateQuerySchema = strictObject({
+  personId: z.string().trim().uuid(),
+});
+
+const legacyCreateUserBodySchema = strictObject({
+  username: z.string().trim().min(3).max(64).regex(/^[A-Za-z0-9_.-]+$/),
+  password: z.string().min(8).max(128),
+});
 export const buildApiRouter = (): Router => {
   const router = Router();
   const DEFAULT_BRANCH_CODE = String(process.env.DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
@@ -133,53 +413,46 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/outlets",
     requireStaffAccess,
-    asyncHandler(async (_req, res) => {
-      const outlets = await getOutletOptions();
+    asyncHandler(async (req, res) => {
+      const staff = getStaffAccessFromRequest(req);
+      if (!staff) {
+        throw new HttpError(401, "Not authenticated");
+      }
+      const outlets = await getOutletOptionsForStaff(staff);
       res.json({ outlets });
     }),
   );
 
   router.get(
     "/menu/catalog",
+    applyValidation({ query: menuCatalogQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const catalog = await getMenuCatalogForBranch(branchCode);
+      const { branchCode } = req.query as z.infer<typeof menuCatalogQuerySchema>;
+      const catalog = await getMenuCatalogForBranch(branchCode || DEFAULT_BRANCH_CODE);
       res.json(catalog);
     }),
   );
 
   router.get(
     "/tables/public-access",
+    applyValidation({ query: publicTableAccessQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const tableNumber = Number(req.query.tableNumber);
-      if (!Number.isFinite(tableNumber) || tableNumber <= 0) {
-        throw new HttpError(400, "Valid tableNumber is required");
-      }
-      const access = await getPublicTableAccess(branchCode, tableNumber);
+      const { branchCode, tableNumber } = req.query as unknown as z.infer<
+        typeof publicTableAccessQuerySchema
+      >;
+      const access = await getPublicTableAccess(branchCode || DEFAULT_BRANCH_CODE, tableNumber);
       res.json(access);
     }),
   );
 
   router.post(
     "/tables/check-in",
+    applyValidation({ body: checkInBodySchema }),
     asyncHandler(async (req, res) => {
-      const { branchCode, tableNumber } = req.body as {
-        branchCode?: string;
-        tableNumber?: number;
-      };
-      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
-        throw new HttpError(400, "Valid tableNumber is required");
-      }
+      const { branchCode, tableNumber } = req.body as z.infer<typeof checkInBodySchema>;
       const payload = await checkInTableFromQr(
         branchCode || DEFAULT_BRANCH_CODE,
-        Math.round(Number(tableNumber)),
+        tableNumber,
       );
       res.status(201).json(payload);
     }),
@@ -191,15 +464,11 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/waiter/call",
+    applyValidation({ body: waiterCallBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableNumber, tableLabel, branchCode } = req.body as {
-        tableNumber?: number;
-        tableLabel?: string;
-        branchCode?: string;
-      };
-      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
-        throw new HttpError(400, "Valid tableNumber is required");
-      }
+      const { tableNumber, tableLabel, branchCode } = req.body as z.infer<
+        typeof waiterCallBodySchema
+      >;
 
       const normalizedBranchCode =
         typeof branchCode === "string" && branchCode.trim()
@@ -231,19 +500,15 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/manager/waiter-calls",
     requireManagerAccess,
+    applyValidation({ query: waiterCallsQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const sinceRaw =
-        typeof req.query.since === "string" ? Number(req.query.since) : 0;
-      const since = Number.isFinite(sinceRaw) ? Math.max(0, sinceRaw) : 0;
+      const { branchCode, since = 0 } = req.query as z.infer<typeof waiterCallsQuerySchema>;
 
       pruneWaiterCalls();
 
       const events = waiterCallEvents.filter(
-        (event) => event.branchCode === branchCode && event.createdAtMs > since,
+        (event) =>
+          event.branchCode === (branchCode || DEFAULT_BRANCH_CODE) && event.createdAtMs > since,
       );
 
       res.json({ events });
@@ -253,6 +518,7 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/orders/place",
     requireCustomerAuth,
+    applyValidation({ body: placeOrderBodySchema }),
     asyncHandler(async (req, res) => {
       let order;
       try {
@@ -261,7 +527,7 @@ export const buildApiRouter = (): Router => {
           throw new HttpError(401, "You must be logged in to place an order");
         }
 
-        const rawBody = (req.body ?? {}) as Record<string, unknown>;
+        const rawBody = req.body as z.infer<typeof placeOrderBodySchema>;
         const incomingName =
           typeof rawBody.customerName === "string"
             ? rawBody.customerName.trim()
@@ -296,25 +562,22 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/orders/history",
     requireCustomerAuth,
+    applyValidation({ query: customerHistoryQuerySchema }),
     asyncHandler(async (req, res) => {
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.email) {
         throw new HttpError(401, "You must be logged in to view order history");
       }
 
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const limitRaw =
-        typeof req.query.limit === "string" ? Number(req.query.limit) : 200;
-      const safeLimit = Number.isFinite(limitRaw) ? limitRaw : 200;
+      const { branchCode, limit = 200 } = req.query as z.infer<
+        typeof customerHistoryQuerySchema
+      >;
 
       const orders = await getCustomerOrderHistoryForAccount({
         customerAuthUserId: authenticatedUser.id,
         customerEmail: authenticatedUser.email,
-        branchCode,
-        limit: safeLimit,
+        branchCode: branchCode || DEFAULT_BRANCH_CODE,
+        limit,
       });
 
       res.json({ orders });
@@ -324,21 +587,19 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/orders/loyalty-summary",
     requireCustomerAuth,
+    applyValidation({ query: loyaltySummaryQuerySchema }),
     asyncHandler(async (req, res) => {
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.email) {
         throw new HttpError(401, "You must be logged in to view loyalty summary");
       }
 
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
+      const { branchCode } = req.query as z.infer<typeof loyaltySummaryQuerySchema>;
 
       const summary = await getCustomerLoyaltySummaryForAccount({
         customerAuthUserId: authenticatedUser.id,
         customerEmail: authenticatedUser.email,
-        branchCode,
+        branchCode: branchCode || DEFAULT_BRANCH_CODE,
       });
 
       res.json({ summary });
@@ -348,20 +609,16 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/customers/profile",
     requireCustomerAuth,
+    applyValidation({ body: customerProfileBodySchema }),
     asyncHandler(async (req, res) => {
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.email) {
         throw new HttpError(401, "You must be logged in to update your profile");
       }
 
-      const { deviceFingerprint, name, email } = req.body as {
-        deviceFingerprint?: string;
-        name?: string;
-        email?: string;
-      };
-      if (!deviceFingerprint || !name) {
-        throw new HttpError(400, "deviceFingerprint and name are required");
-      }
+      const { deviceFingerprint, name, email } = req.body as z.infer<
+        typeof customerProfileBodySchema
+      >;
 
       const normalizedEmail = String(email ?? "").trim().toLowerCase();
       if (normalizedEmail && normalizedEmail !== authenticatedUser.email) {
@@ -380,12 +637,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/manager/live-orders",
     requireManagerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const orders = await getManagerLiveOrders(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const orders = await getManagerLiveOrders(branchCode || DEFAULT_BRANCH_CODE);
       res.json({ orders });
     }),
   );
@@ -393,12 +648,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/manager/menu-items",
     requireManagerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const items = await getManagerMenuItems(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const items = await getManagerMenuItems(branchCode || DEFAULT_BRANCH_CODE);
       res.json({ items });
     }),
   );
@@ -406,12 +659,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/manager/outlet-ordering-settings",
     requireManagerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const settings = await getOutletOrderingSettingsForBranch(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const settings = await getOutletOrderingSettingsForBranch(branchCode || DEFAULT_BRANCH_CODE);
       res.json({ settings });
     }),
   );
@@ -419,27 +670,10 @@ export const buildApiRouter = (): Router => {
   router.patch(
     "/manager/outlet-ordering-settings",
     requireManagerAccess,
+    applyValidation({ body: outletOrderingSettingsBodySchema }),
     asyncHandler(async (req, res) => {
-      const {
-        branchCode,
-        serviceStartTime,
-        serviceEndTime,
-        lastTakeawayTime,
-        timezone,
-      } = req.body as {
-        branchCode?: string;
-        serviceStartTime?: string;
-        serviceEndTime?: string;
-        lastTakeawayTime?: string;
-        timezone?: string;
-      };
-
-      if (!serviceStartTime || !serviceEndTime || !lastTakeawayTime) {
-        throw new HttpError(
-          400,
-          "serviceStartTime, serviceEndTime, and lastTakeawayTime are required",
-        );
-      }
+      const { branchCode, serviceStartTime, serviceEndTime, lastTakeawayTime, timezone } =
+        req.body as z.infer<typeof outletOrderingSettingsBodySchema>;
 
       const settings = await updateOutletOrderingSettingsForBranch({
         branchCode: typeof branchCode === "string" ? branchCode : DEFAULT_BRANCH_CODE,
@@ -455,17 +689,15 @@ export const buildApiRouter = (): Router => {
   router.patch(
     "/manager/menu-items/:itemId",
     requireManagerAccess,
+    applyValidation({
+      params: managerMenuItemParamsSchema,
+      body: managerMenuItemPatchBodySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { itemId } = req.params;
-      const { price, available } = req.body as {
-        price?: number;
-        available?: boolean;
-      };
-      if (!itemId) {
-        throw new HttpError(400, "itemId is required");
-      }
-      const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
+      const { itemId } = req.params as z.infer<typeof managerMenuItemParamsSchema>;
+      const { price, available, branchCode } = req.body as z.infer<
+        typeof managerMenuItemPatchBodySchema
+      >;
       const item = await updateManagerMenuItem({ id: itemId, price, available, branchCode });
       res.json({ item });
     }),
@@ -474,12 +706,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/manager/table-management",
     requireManagerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const snapshot = await getTableSnapshot(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const snapshot = await getTableSnapshot(branchCode || DEFAULT_BRANCH_CODE);
       res.json(snapshot);
     }),
   );
@@ -487,16 +717,15 @@ export const buildApiRouter = (): Router => {
   router.patch(
     "/manager/tables/:tableId/availability",
     requireManagerAccess,
+    applyValidation({
+      params: managerTableParamsSchema,
+      body: managerTableAvailabilityBodySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { tableId } = req.params;
-      const { availability } = req.body as {
-        availability?: "available" | "unavailable";
-      };
-      if (!tableId || !availability) {
-        throw new HttpError(400, "tableId and availability are required");
-      }
-      const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
+      const { tableId } = req.params as z.infer<typeof managerTableParamsSchema>;
+      const { availability, branchCode } = req.body as z.infer<
+        typeof managerTableAvailabilityBodySchema
+      >;
       const table = await updateManagerTableAvailability({ tableId, availability, branchCode });
       res.json({ table });
     }),
@@ -505,16 +734,13 @@ export const buildApiRouter = (): Router => {
   router.patch(
     "/manager/orders/:orderNumber/status",
     requireManagerAccess,
+    applyValidation({
+      params: managerOrderStatusParamsSchema,
+      body: managerOrderStatusBodySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { orderNumber } = req.params;
-      const { status } = req.body as {
-        status?: "accepted" | "preparing" | "ready";
-      };
-      if (!orderNumber || !status) {
-        throw new HttpError(400, "orderNumber and status are required");
-      }
-      const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
+      const { orderNumber } = req.params as z.infer<typeof managerOrderStatusParamsSchema>;
+      const { status, branchCode } = req.body as z.infer<typeof managerOrderStatusBodySchema>;
       const updated = await updateOrderStatusFromManager({ orderNumber, status, branchCode });
       await notifyTrackedOrderStatus(orderNumber, updated.status);
       res.json({ order: updated });
@@ -524,25 +750,21 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/orders/:orderNumber/status",
     requireCustomerAuth,
+    applyValidation({
+      params: orderStatusParamsSchema,
+      query: orderStatusQuerySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { orderNumber } = req.params;
-      if (!orderNumber) {
-        throw new HttpError(400, "orderNumber is required");
-      }
+      const { orderNumber } = req.params as z.infer<typeof orderStatusParamsSchema>;
 
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.email) {
         throw new HttpError(401, "You must be logged in to track this order");
       }
 
-      const deviceFingerprint =
-        typeof req.query.deviceFingerprint === "string"
-          ? req.query.deviceFingerprint.trim()
-          : undefined;
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
+      const { deviceFingerprint, branchCode } = req.query as z.infer<
+        typeof orderStatusQuerySchema
+      >;
 
       const order = await getOrderTrackerStatusForCustomer({
         orderNumber,
@@ -558,12 +780,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/admin/qr-codes",
     requireAdminAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const rows = await getAdminQrCodes(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const rows = await getAdminQrCodes(branchCode || DEFAULT_BRANCH_CODE);
       res.json({ rows });
     }),
   );
@@ -571,17 +791,12 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/admin/qr-codes",
     requireAdminAccess,
+    applyValidation({ body: adminQrCreateBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableNumber, branchCode } = req.body as {
-        tableNumber?: number;
-        branchCode?: string;
-      };
-      if (!Number.isFinite(tableNumber) || Number(tableNumber) <= 0) {
-        throw new HttpError(400, "Valid tableNumber is required");
-      }
+      const { tableNumber, branchCode } = req.body as z.infer<typeof adminQrCreateBodySchema>;
       await createAdminQrCode(
         branchCode || DEFAULT_BRANCH_CODE,
-        Math.round(Number(tableNumber)),
+        tableNumber,
       );
       const rows = await getAdminQrCodes(branchCode || DEFAULT_BRANCH_CODE);
       res.status(201).json({ rows });
@@ -591,11 +806,12 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/admin/qr-codes/takeaway",
     requireAdminAccess,
+    applyValidation({ body: adminTakeawayQrBodySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.body.branchCode === "string" ? req.body.branchCode : DEFAULT_BRANCH_CODE;
-      const created = await createAdminTakeawayQrCode(branchCode);
-      const rows = await getAdminQrCodes(branchCode);
+      const { branchCode } = req.body as z.infer<typeof adminTakeawayQrBodySchema>;
+      const targetBranchCode = branchCode || DEFAULT_BRANCH_CODE;
+      const created = await createAdminTakeawayQrCode(targetBranchCode);
+      const rows = await getAdminQrCodes(targetBranchCode);
       const createdRow = rows.find((row) => row.tableNumber === created.tableNumber);
       res.status(201).json({ rows, created: createdRow ?? null });
     }),
@@ -603,11 +819,9 @@ export const buildApiRouter = (): Router => {
   router.delete(
     "/admin/qr-codes/:id",
     requireAdminAccess,
+    applyValidation({ params: adminQrDeleteParamsSchema }),
     asyncHandler(async (req, res) => {
-      const { id } = req.params;
-      if (!id) {
-        throw new HttpError(400, "id is required");
-      }
+      const { id } = req.params as z.infer<typeof adminQrDeleteParamsSchema>;
       await deleteAdminQrCode(id);
       res.json({ ok: true });
     }),
@@ -616,8 +830,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/admin/earnings",
     requireAdminAccess,
-    asyncHandler(async (_req, res) => {
-      const payload = await getAdminEarnings();
+    applyValidation({ query: adminEarningsQuerySchema }),
+    asyncHandler(async (req, res) => {
+      const { branchCode } = req.query as z.infer<typeof adminEarningsQuerySchema>;
+      const payload = await getAdminEarnings(branchCode);
       res.json(payload);
     }),
   );
@@ -625,12 +841,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/cards",
     requireOwnerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const cards = await getOwnerDashboardCards(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const cards = await getOwnerDashboardCards(branchCode || DEFAULT_BRANCH_CODE);
       res.json(cards);
     }),
   );
@@ -638,13 +852,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/sales-trend",
     requireOwnerAccess,
+    applyValidation({ query: ownerSalesTrendQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
-      const trend = await getOwnerSalesTrend(branchCode, rangeDays);
+      const { branchCode, rangeDays = 30 } = req.query as z.infer<typeof ownerSalesTrendQuerySchema>;
+      const trend = await getOwnerSalesTrend(branchCode || DEFAULT_BRANCH_CODE, rangeDays);
       res.json({ points: trend });
     }),
   );
@@ -652,13 +863,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/top-items",
     requireOwnerAccess,
+    applyValidation({ query: ownerRangeDaysQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const rangeDays = Number(req.query.rangeDays ?? 30) || 30;
-      const rows = await getOwnerTopSellingItems(branchCode, rangeDays);
+      const { branchCode, rangeDays = 30 } = req.query as z.infer<typeof ownerRangeDaysQuerySchema>;
+      const rows = await getOwnerTopSellingItems(branchCode || DEFAULT_BRANCH_CODE, rangeDays);
       res.json({ rows });
     }),
   );
@@ -666,12 +874,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/table-management",
     requireOwnerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const snapshot = await getTableSnapshot(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const snapshot = await getTableSnapshot(branchCode || DEFAULT_BRANCH_CODE);
       res.json(snapshot);
     }),
   );
@@ -679,18 +885,16 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/menu-insights",
     requireOwnerAccess,
+    applyValidation({ query: ownerMenuInsightsQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const dateRange =
-        typeof req.query.dateRange === "string"
-          ? (req.query.dateRange as "today" | "this-week" | "this-month")
-          : "today";
-      const category =
-        typeof req.query.category === "string" ? req.query.category : "all";
-      const payload = await getOwnerMenuInsights(branchCode, dateRange, category);
+      const { branchCode, dateRange = "today", category = "all" } = req.query as z.infer<
+        typeof ownerMenuInsightsQuerySchema
+      >;
+      const payload = await getOwnerMenuInsights(
+        branchCode || DEFAULT_BRANCH_CODE,
+        dateRange,
+        category,
+      );
       res.json(payload);
     }),
   );
@@ -698,12 +902,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/orders/summary",
     requireOwnerAccess,
+    applyValidation({ query: branchCodeOnlyQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const summary = await getOwnerOrdersSummary(branchCode);
+      const { branchCode } = req.query as z.infer<typeof branchCodeOnlyQuerySchema>;
+      const summary = await getOwnerOrdersSummary(branchCode || DEFAULT_BRANCH_CODE);
       res.json(summary);
     }),
   );
@@ -711,19 +913,18 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/orders/trend",
     requireOwnerAccess,
+    applyValidation({ query: ownerOrdersTrendQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const mode = typeof req.query.mode === "string" ? req.query.mode : "day";
+      const { branchCode, mode = "day", rangeDays = 7 } = req.query as z.infer<
+        typeof ownerOrdersTrendQuerySchema
+      >;
+      const targetBranchCode = branchCode || DEFAULT_BRANCH_CODE;
       if (mode === "hour") {
-        const points = await getOwnerOrdersTrendByHourToday(branchCode);
+        const points = await getOwnerOrdersTrendByHourToday(targetBranchCode);
         res.json({ points });
         return;
       }
-      const rangeDays = Number(req.query.rangeDays ?? 7) || 7;
-      const points = await getOwnerOrdersTrendByDay(branchCode, rangeDays);
+      const points = await getOwnerOrdersTrendByDay(targetBranchCode, rangeDays);
       res.json({ points });
     }),
   );
@@ -731,13 +932,10 @@ export const buildApiRouter = (): Router => {
   router.get(
     "/dashboard/owner/orders/table",
     requireOwnerAccess,
+    applyValidation({ query: ownerRangeDaysQuerySchema }),
     asyncHandler(async (req, res) => {
-      const branchCode =
-        typeof req.query.branchCode === "string"
-          ? req.query.branchCode
-          : DEFAULT_BRANCH_CODE;
-      const rangeDays = Number(req.query.rangeDays ?? 31) || 31;
-      const rows = await getOwnerOrdersTable(branchCode, rangeDays);
+      const { branchCode, rangeDays = 31 } = req.query as z.infer<typeof ownerRangeDaysQuerySchema>;
+      const rows = await getOwnerOrdersTable(branchCode || DEFAULT_BRANCH_CODE, rangeDays);
       res.json({ rows });
     }),
   );
@@ -745,21 +943,16 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/push/subscribe",
     requireCustomerAuth,
+    applyValidation({ body: pushSubscribeBodySchema }),
     asyncHandler(async (req, res) => {
-      const { subscription } = req.body as {
-        subscription?: PushSubscriptionPayload;
-      };
+      const { subscription } = req.body as z.infer<typeof pushSubscribeBodySchema>;
 
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.id) {
         throw new HttpError(401, "You must be logged in to subscribe for notifications");
       }
 
-      if (!subscription?.endpoint || !subscription?.keys?.auth || !subscription?.keys?.p256dh) {
-        throw new HttpError(400, "Valid PushSubscription is required");
-      }
-
-      upsertPushSubscription(authenticatedUser.id, subscription);
+      upsertPushSubscription(authenticatedUser.id, subscription as PushSubscriptionPayload);
       res.status(201).json({ ok: true });
     }),
   );
@@ -767,14 +960,12 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/push/unsubscribe",
     requireCustomerAuth,
+    applyValidation({ body: pushUnsubscribeBodySchema }),
     asyncHandler(async (req, res) => {
-      const { endpoint } = req.body as { endpoint?: string };
+      const { endpoint } = req.body as z.infer<typeof pushUnsubscribeBodySchema>;
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.id) {
         throw new HttpError(401, "You must be logged in to unsubscribe notifications");
-      }
-      if (!endpoint) {
-        throw new HttpError(400, "endpoint is required");
       }
 
       removePushSubscription(authenticatedUser.id, endpoint);
@@ -785,21 +976,20 @@ export const buildApiRouter = (): Router => {
   router.post(
     "/orders/track/start",
     requireCustomerAuth,
+    applyValidation({ body: orderTrackStartBodySchema }),
     asyncHandler(async (req, res) => {
-      const { orderNumber, tableLabel } = req.body as {
-        orderNumber?: string;
-        tableLabel?: string;
-      };
+      const { orderNumber, tableLabel, menuUrl } = req.body as z.infer<typeof orderTrackStartBodySchema>;
       const authenticatedUser = req.authenticatedUser;
       if (!authenticatedUser?.id) {
         throw new HttpError(401, "You must be logged in to start order tracking");
       }
 
-      if (!orderNumber || !tableLabel) {
-        throw new HttpError(400, "orderNumber and tableLabel are required");
-      }
-
-      await startOrderPushTracking({ userId: authenticatedUser.id, orderNumber, tableLabel });
+      await startOrderPushTracking({
+        userId: authenticatedUser.id,
+        orderNumber,
+        tableLabel,
+        menuUrl,
+      });
       res.status(202).json({ ok: true });
     }),
   );
@@ -807,8 +997,10 @@ export const buildApiRouter = (): Router => {
   if (enableLegacyCustomerApis) {
   router.get(
     "/users/:username",
+    applyValidation({ params: usersParamsSchema }),
     asyncHandler(async (req, res) => {
-      const user = await storage.getUserByUsername(req.params.username);
+      const { username } = req.params as z.infer<typeof usersParamsSchema>;
+      const user = await storage.getUserByUsername(username);
       if (!user) {
         throw new HttpError(404, "User not found");
       }
@@ -818,6 +1010,7 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/users",
+    applyValidation({ body: legacyCreateUserBodySchema }),
     asyncHandler(async (req, res) => {
       const parsed = insertUserSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -840,11 +1033,11 @@ export const buildApiRouter = (): Router => {
   // --- TableTap multi-user session + cart APIs ---
   router.post(
     "/table-session/attach",
+    applyValidation({ body: tableSessionAttachBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableId, deviceFingerprint } = req.body as { tableId?: string; deviceFingerprint?: string };
-      if (!tableId || !deviceFingerprint) {
-        throw new HttpError(400, "tableId and deviceFingerprint are required");
-      }
+      const { tableId, deviceFingerprint } = req.body as z.infer<
+        typeof tableSessionAttachBodySchema
+      >;
 
       const tableSession = await storage.getOrCreateActiveTableSession(tableId);
       const { person, cart } = await storage.attachPerson(tableSession.id, deviceFingerprint);
@@ -864,16 +1057,9 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/orders/add-item",
+    applyValidation({ body: addItemBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableSessionId, personId, items } = req.body as {
-        tableSessionId?: string;
-        personId?: string;
-        items?: Array<{ menuItemId: string; qty: number; price: number; notes?: string }>;
-      };
-
-      if (!tableSessionId || !personId || !Array.isArray(items) || items.length === 0) {
-        throw new HttpError(400, "tableSessionId, personId and items are required");
-      }
+      const { tableSessionId, personId, items } = req.body as z.infer<typeof addItemBodySchema>;
 
       const result = await storage.addItemsForPerson({
         tableSessionId,
@@ -887,16 +1073,11 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/orders/remove-item",
+    applyValidation({ body: removeItemBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableSessionId, personId, menuItemId } = req.body as {
-        tableSessionId?: string;
-        personId?: string;
-        menuItemId?: string;
-      };
-
-      if (!tableSessionId || !personId || !menuItemId) {
-        throw new HttpError(400, "tableSessionId, personId and menuItemId are required");
-      }
+      const { tableSessionId, personId, menuItemId } = req.body as z.infer<
+        typeof removeItemBodySchema
+      >;
 
       const removed = await storage.removePersonalItem({ tableSessionId, personId, menuItemId });
       res.json({ removed });
@@ -905,11 +1086,9 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/group-orders",
+    applyValidation({ body: groupOrderCreateBodySchema }),
     asyncHandler(async (req, res) => {
-      const { tableSessionId, personId } = req.body as { tableSessionId?: string; personId?: string };
-      if (!tableSessionId || !personId) {
-        throw new HttpError(400, "tableSessionId and personId are required");
-      }
+      const { tableSessionId, personId } = req.body as z.infer<typeof groupOrderCreateBodySchema>;
 
       const result = await storage.createGroupOrder(tableSessionId, personId);
       res.status(201).json(result);
@@ -918,12 +1097,13 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/group-orders/:groupOrderId/join",
+    applyValidation({
+      params: groupOrderParamsSchema,
+      body: groupOrderJoinBodySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { groupOrderId } = req.params;
-      const { personId } = req.body as { personId?: string };
-      if (!groupOrderId || !personId) {
-        throw new HttpError(400, "groupOrderId and personId are required");
-      }
+      const { groupOrderId } = req.params as z.infer<typeof groupOrderParamsSchema>;
+      const { personId } = req.body as z.infer<typeof groupOrderJoinBodySchema>;
 
       const result = await storage.joinGroupOrder(groupOrderId, personId);
       res.json(result);
@@ -932,11 +1112,9 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/group-orders/:groupOrderId/close",
+    applyValidation({ params: groupOrderParamsSchema }),
     asyncHandler(async (req, res) => {
-      const { groupOrderId } = req.params;
-      if (!groupOrderId) {
-        throw new HttpError(400, "groupOrderId is required");
-      }
+      const { groupOrderId } = req.params as z.infer<typeof groupOrderParamsSchema>;
 
       const groupOrder = await storage.closeGroupOrder(groupOrderId);
       res.json({ groupOrder });
@@ -945,11 +1123,9 @@ export const buildApiRouter = (): Router => {
 
   router.post(
     "/table-session/:tableSessionId/finish",
+    applyValidation({ params: tableSessionParamsSchema }),
     asyncHandler(async (req, res) => {
-      const { tableSessionId } = req.params;
-      if (!tableSessionId) {
-        throw new HttpError(400, "tableSessionId is required");
-      }
+      const { tableSessionId } = req.params as z.infer<typeof tableSessionParamsSchema>;
 
       const tableSession = await storage.finishTableSession(tableSessionId);
       res.json({ tableSession });
@@ -958,12 +1134,13 @@ export const buildApiRouter = (): Router => {
 
   router.get(
     "/table-session/:tableSessionId/state",
+    applyValidation({
+      params: tableSessionParamsSchema,
+      query: tableSessionStateQuerySchema,
+    }),
     asyncHandler(async (req, res) => {
-      const { tableSessionId } = req.params;
-      const { personId } = req.query as { personId?: string };
-      if (!tableSessionId || !personId) {
-        throw new HttpError(400, "tableSessionId and personId are required");
-      }
+      const { tableSessionId } = req.params as z.infer<typeof tableSessionParamsSchema>;
+      const { personId } = req.query as z.infer<typeof tableSessionStateQuerySchema>;
 
       const state = await storage.getStateForSession(tableSessionId, personId);
       res.json(state);
@@ -983,6 +1160,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   return httpServer;
 }
+
+
 
 
 

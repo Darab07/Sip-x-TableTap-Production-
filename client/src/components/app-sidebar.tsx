@@ -13,7 +13,11 @@ import {
   UtensilsCrossedIcon,
 } from "lucide-react"
 import { useLocation } from "wouter"
-import { fetchOutlets } from "@/lib/tabletap-supabase-api"
+import {
+  fetchOutlets,
+  getApiDefaultBranchCode,
+  setApiDefaultBranchCode,
+} from "@/lib/tabletap-supabase-api"
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
 import { supabaseBrowser } from "@/lib/supabase"
 
@@ -93,9 +97,20 @@ export function AppSidebar({
         const response = await fetchOutlets()
         if (!cancelled) {
           setOutlets(response.outlets)
-          setSelectedOutlet((current) =>
-            current || response.outlets[0]?.branchCode || ""
-          )
+          const preferredBranchCode = getApiDefaultBranchCode()
+          setSelectedOutlet((current) => {
+            const candidate = current || preferredBranchCode
+            const exists = response.outlets.some(
+              (outlet) => outlet.branchCode === candidate,
+            )
+            const nextBranchCode = exists
+              ? candidate
+              : response.outlets[0]?.branchCode || ""
+            if (nextBranchCode) {
+              setApiDefaultBranchCode(nextBranchCode)
+            }
+            return nextBranchCode
+          })
         }
       } catch (error) {
         if (!cancelled) {
@@ -283,7 +298,13 @@ export function AppSidebar({
       <SidebarContent>
         {resolvedRole !== "manager" ? (
           <div className="px-2 pt-1">
-            <Select value={selectedOutlet} onValueChange={setSelectedOutlet}>
+            <Select
+              value={selectedOutlet}
+              onValueChange={(value) => {
+                setSelectedOutlet(value)
+                setApiDefaultBranchCode(value)
+              }}
+            >
               <SelectTrigger className="w-full">
                 {resolvedRole === "admin" ? (
                   <div className="grid text-left leading-tight">

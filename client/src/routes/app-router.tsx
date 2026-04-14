@@ -42,6 +42,8 @@ const AppRouter = () => {
   return (
     <AnimatePresence mode="wait">
       <Switch location={location} key={location}>
+        <Route path="/:restaurantSlug/menu/:menuPath*" component={Menu} />
+        <Route path="/:restaurantSlug/menu" component={Menu} />
         <Route path="/sip/menu/:menuPath*" component={Menu} />
         <Route path="/sip/menu" component={Menu} />
         <Route path="/menu/:menuPath*" component={Menu} />

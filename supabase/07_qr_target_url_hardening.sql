@@ -13,18 +13,35 @@ update public.table_qr_codes q
 set target_url =
   case
     when coalesce(t.table_number, 0) >= 9000
-      then '/sip/menu?table=' || 'Takeaway' || (t.table_number - 8999)::text
+      then
+        '/' || route.restaurant_segment || '/menu?table=' || 'Takeaway' || (t.table_number - 8999)::text
+        || '&branchCode=' || route.branch_code
+        || '&restaurant=' || route.restaurant_segment
     when coalesce(t.table_number, 0) > 0
-      then '/sip/menu?table=' || 'Table' || t.table_number::text
-    else '/sip/menu'
+      then
+        '/' || route.restaurant_segment || '/menu?table=' || 'Table' || t.table_number::text
+        || '&branchCode=' || route.branch_code
+        || '&restaurant=' || route.restaurant_segment
+    else '/' || route.restaurant_segment || '/menu?branchCode=' || route.branch_code || '&restaurant=' || route.restaurant_segment
   end
 from public.restaurant_tables t
+cross join (
+  select
+    o.id as outlet_id,
+    coalesce(nullif(lower(o.branch_code), ''), 'f7-islamabad') as branch_code,
+    coalesce(
+      nullif(split_part(lower(coalesce(r.slug, r.name, 'sip')), '-', 1), ''),
+      'sip'
+    ) as restaurant_segment
+  from public.outlets o
+  left join public.restaurants r on r.id = o.restaurant_id
+) as route
 where q.table_id = t.id
-  and (q.target_url is null or btrim(q.target_url) = '');
+  and route.outlet_id = q.outlet_id;
 
 -- Fallback for any orphan/legacy rows without table mapping.
 update public.table_qr_codes
-set target_url = '/sip/menu'
+set target_url = '/menu'
 where target_url is null or btrim(target_url) = '';
 
 alter table public.table_qr_codes

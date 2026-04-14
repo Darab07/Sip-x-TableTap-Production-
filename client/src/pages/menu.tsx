@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { useLocation } from "wouter";
 import {
   Check,
   BellRing,
@@ -43,24 +44,21 @@ import {
 } from "@/lib/tabletap-supabase-api";
 import { supabaseBrowser } from "@/lib/supabase";
 import { getDeviceFingerprint } from "@/lib/tabletap-api";
+import {
+  buildMenuQueryString,
+  getMenuBasePathForSlug,
+  getMenuTableIdentifier,
+  getRestaurantProfileForSlug,
+  getRestaurantSlugFromMenuPath,
+  parseTableNumberFromIdentifier,
+  parseTableNumberFromLabel,
+  resolveMenuBranchCode,
+} from "@/lib/customer-menu";
 
 const userId = getOrCreateUserID();
 
-const tabs = ["Breakfast", "Salads", "Sandwiches", "Coffee", "Slow Bar", "Not Coffee", "Matcha"];
-
-const RESTAURANT = {
-  name: "SIP",
-  address: "F-8/3, Islamabad",
-  rating: 4.8,
-  reviews: 2729,
-  servingTime: "15 - 20 min",
-  averageLabel: "Average serving time",
-  hours: "8 AM - 1 AM",
-};
-
 const DAILY_PROMO_SEEN_KEY = `tabletap_daily_promo_seen_${userId}`;
 const LOYALTY_STAMP_TARGET = 10;
-const DEFAULT_BRANCH_CODE = String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 const LOYALTY_CUP_STAMP_SRC = "/LoyaltyCupStamp.png";
 
 const getDefaultDisplayName = (id: string) => {
@@ -284,7 +282,13 @@ const OFFERED_MENU_ITEM_NAMES_BY_CATEGORY = {
 } as const;
 
 const OFFERED_MENU_CATEGORY_SLUGS = new Set(
-  Object.keys(OFFERED_MENU_ITEM_NAMES_BY_CATEGORY),
+  [
+    ...Object.keys(OFFERED_MENU_ITEM_NAMES_BY_CATEGORY),
+    "hot-coffee",
+    "iced-coffee",
+    "signature-drinks",
+    "matcha-ceremonial-grade",
+  ],
 );
 
 const OFFERED_MENU_ITEM_NAME_LOOKUP = new Map<string, Set<string>>(
@@ -454,28 +458,27 @@ function SmartCounter({
 }
 
 export default function Menu() {
+  const [location] = useLocation();
+  const pathname =
+    typeof window === "undefined" ? location : window.location.pathname;
+  const search =
+    typeof window === "undefined" ? "" : window.location.search;
+  const restaurantSlug = getRestaurantSlugFromMenuPath(pathname);
+  const restaurantProfile = getRestaurantProfileForSlug(restaurantSlug);
+  const menuBasePath = getMenuBasePathForSlug(restaurantSlug);
+  const menuBranchCode = resolveMenuBranchCode(pathname, search);
+  const tableIdentifier = getMenuTableIdentifier(search);
+  const deviceFingerprint = getDeviceFingerprint();
+  const tableNumberNumeric = parseTableNumberFromIdentifier(tableIdentifier);
+  const tableNumber = String(tableNumberNumeric);
+  const tableQuery = buildMenuQueryString({
+    tableIdentifier,
+    branchCode: menuBranchCode,
+    restaurantSlug,
+  });
 
-  const getTableIdentifier = () => {
-    if (typeof window === "undefined") {
-      return "Table1";
-    }
-    const params = new URLSearchParams(window.location.search);
-    return params.get("table") ?? "Table1";
-  };
-
-const tableIdentifier = getTableIdentifier();
-const deviceFingerprint = getDeviceFingerprint();
-const tableNumberMatch = tableIdentifier.match(/(\d+)/);
-const tableNumber =
-  tableNumberMatch ? tableNumberMatch[1] : tableIdentifier.replace(/[^0-9]/g, "") || "1";
-const tableNumberNumeric = Number(tableNumber) || 1;
-const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifier)}` : "";
-
-  const getTableNumberFromLabel = (label?: string) => {
-    if (!label) return "";
-    const match = label.match(/(\d+)/);
-    return match ? match[1] : "";
-  };
+  const getTableNumberFromLabel = (label?: string) =>
+    parseTableNumberFromLabel(label ?? "");
 
   const getStoredOrderForCurrentTable = (storageScope: string) => {
     const savedOrder = localStorage.getItem(`lastOrder_${storageScope}`);
@@ -490,7 +493,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         return null;
       }
       const savedTableNumber = getTableNumberFromLabel(parsed.tableLabel);
-      if (savedTableNumber !== tableNumber) {
+      if (savedTableNumber !== tableNumberNumeric) {
         return null;
       }
       const normalizedOrder: StoredOrder = {
@@ -539,7 +542,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     }
   };
   
-  const [activeTab, setActiveTab] = useState("Breakfast");
+  const [activeTab, setActiveTab] = useState(restaurantSlug === "karo" ? "Hot Coffee" : "Breakfast");
   
   // Refs for scrolling to sections
   const breakfastRef = useRef<HTMLDivElement>(null);
@@ -549,9 +552,44 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const slowBarRef = useRef<HTMLDivElement>(null);
   const notCoffeeRef = useRef<HTMLDivElement>(null);
   const matchaRef = useRef<HTMLDivElement>(null);
+  const isKaroMenuRoute = restaurantSlug === "karo";
+  const heroImageSrc = isKaroMenuRoute ? "/Karo Background.jpg" : "/HeroImage.jpg";
+  const tabs = isKaroMenuRoute
+    ? ["Hot Coffee", "Iced Coffee", "Signature Drinks", "Matcha Ceremonial Grade"]
+    : ["Breakfast", "Salads", "Sandwiches", "Coffee", "Slow Bar", "Not Coffee", "Matcha"];
+  const sectionTitleLabels = isKaroMenuRoute
+    ? {
+        breakfast: "HOT COFFEE.",
+        salads: "ICED COFFEE.",
+        sandwiches: "SIGNATURE DRINKS.",
+        coffee: "COFFEE.",
+        "slow-bar": "SLOW BAR.",
+        "not-coffee": "NOT COFFEE.",
+        matcha: "MATCHA CEREMONIAL GRADE.",
+      }
+    : {
+        breakfast: "BREAKFAST AT SIP.",
+        salads: "SALADS.",
+        sandwiches: "SANDWICHES.",
+        coffee: "COFFEE.",
+        "slow-bar": "SLOW BAR.",
+        "not-coffee": "NOT COFFEE.",
+        matcha: "MATCHA.",
+      };
 
   // Scroll-based active tab detection
-  const [scrollActiveTab, setScrollActiveTab] = useState("Breakfast");
+  const [scrollActiveTab, setScrollActiveTab] = useState(isKaroMenuRoute ? "Hot Coffee" : "Breakfast");
+  useEffect(() => {
+    const firstTab = tabs[0] ?? "";
+    if (!firstTab) return;
+    if (!tabs.includes(activeTab)) {
+      setActiveTab(firstTab);
+    }
+    if (!tabs.includes(scrollActiveTab)) {
+      setScrollActiveTab(firstTab);
+    }
+  }, [activeTab, scrollActiveTab, tabs]);
+
   const [showStickyHeader, setShowStickyHeader] = useState(false);
   const [selectedItem, setSelectedItem] = useState<(MenuItemData & { description: string; price: number }) | null>(null);
   const [selectedEggType, setSelectedEggType] = useState<string | null>(null);
@@ -700,9 +738,9 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       }))
       .filter((order) => normalizeTrackedStatus(order.status) !== "served")
       .filter((order) => isOrderWithinTrackWindow(order))
-      .filter((order) => getTableNumberFromLabel(order.tableLabel) === tableNumber)
+      .filter((order) => getTableNumberFromLabel(order.tableLabel) === tableNumberNumeric)
       .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
-  }, [trackedOrders, tableNumber]);
+  }, [trackedOrders, tableNumberNumeric]);
 
   const currentTrackedOrder = trackableOrders[trackerPageIndex] ?? null;
   const hasTrackableOrders = trackableOrders.length > 0;
@@ -713,6 +751,34 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
   const loyaltyStampTarget = loyaltySummary?.stampTarget ?? LOYALTY_STAMP_TARGET;
   const loyaltyDaysRemaining = loyaltySummary?.daysRemaining ?? loyaltyStampTarget;
   const loyaltyFreeCoffeeAvailable = loyaltySummary?.freeCoffeeAvailable ?? false;
+  const isKaroLoyaltyCard = restaurantSlug === "karo";
+  const loyaltyCardStyle = isKaroLoyaltyCard
+    ? {
+        backgroundColor: "#fff0db",
+        backgroundImage:
+          "linear-gradient(180deg, rgba(255,255,255,0.75) 0%, rgba(244,220,184,0.45) 100%)",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      }
+    : {
+        backgroundColor: "#95c6b5",
+        backgroundImage:
+          "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 100%)",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      };
+  const loyaltyCardTitleClassName = isKaroLoyaltyCard
+    ? "text-[11px] uppercase tracking-[0.22em] text-[#8c6036] subtext-font"
+    : "text-[11px] uppercase tracking-[0.22em] text-white/85 subtext-font";
+  const loyaltyCardCounterClassName = isKaroLoyaltyCard
+    ? "rounded-full bg-[#e9cfad] px-2.5 py-1 text-xs font-semibold text-[#6f4a29] heading-font"
+    : "rounded-full bg-white/20 px-2.5 py-1 text-xs font-semibold text-white heading-font";
+  const loyaltyStampSlotClassName = isKaroLoyaltyCard
+    ? "w-full max-w-16 aspect-square rounded-full border border-[#ecd6b8] bg-white/95 flex shrink-0 items-center justify-center overflow-hidden"
+    : "w-full max-w-16 aspect-square rounded-full bg-white/95 flex shrink-0 items-center justify-center overflow-hidden";
+  const loyaltyFreeTextClassName = isKaroLoyaltyCard
+    ? "text-[10px] leading-[1.05] text-center text-[#9b6a41] font-semibold heading-font"
+    : "text-[10px] leading-[1.05] text-center text-[#b77d7d] font-semibold heading-font";
 
   const openTrackerPanel = () => {
     if (!hasTrackableOrders) return;
@@ -740,7 +806,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     setShowOrderTracker(storedTrackedOrders.length > 0);
     setTrackedOrders(storedTrackedOrders);
     setTrackerPageIndex(0);
-  }, [tableNumber, trackerStorageScope]);
+  }, [tableNumberNumeric, trackerStorageScope]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !trackerStorageScope) return;
@@ -775,11 +841,15 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const map = new Map<string, MenuItemData[]>();
     for (const item of remoteCatalog?.items ?? []) {
       const key = item.categorySlug.toLowerCase();
-      if (!OFFERED_MENU_CATEGORY_SLUGS.has(key)) {
+      if (!isKaroMenuRoute && !OFFERED_MENU_CATEGORY_SLUGS.has(key)) {
         continue;
       }
       const allowedItemNames = OFFERED_MENU_ITEM_NAME_LOOKUP.get(key);
-      if (allowedItemNames && !allowedItemNames.has(item.name.toLowerCase())) {
+      if (
+        !isKaroMenuRoute &&
+        allowedItemNames &&
+        !allowedItemNames.has(item.name.toLowerCase())
+      ) {
         continue;
       }
       const current = map.get(key) ?? [];
@@ -793,15 +863,27 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       map.set(key, values);
     });
     return map;
-  }, [remoteCatalog]);
+  }, [isKaroMenuRoute, remoteCatalog]);
 
-  const BREAKFAST_SOURCE = remoteItemsByCategory.get("breakfast") ?? [];
-  const SALAD_SOURCE = remoteItemsByCategory.get("salads") ?? [];
-  const SANDWICH_SOURCE = remoteItemsByCategory.get("sandwiches") ?? [];
+  const BREAKFAST_SOURCE =
+    remoteItemsByCategory.get("breakfast") ??
+    remoteItemsByCategory.get("hot-coffee") ??
+    [];
+  const SALAD_SOURCE =
+    remoteItemsByCategory.get("salads") ??
+    remoteItemsByCategory.get("iced-coffee") ??
+    [];
+  const SANDWICH_SOURCE =
+    remoteItemsByCategory.get("sandwiches") ??
+    remoteItemsByCategory.get("signature-drinks") ??
+    [];
   const COFFEE_SOURCE = remoteItemsByCategory.get("coffee") ?? [];
   const SLOW_BAR_SOURCE = remoteItemsByCategory.get("slow-bar") ?? [];
   const NOT_COFFEE_SOURCE = remoteItemsByCategory.get("not-coffee") ?? [];
-  const MATCHA_SOURCE = remoteItemsByCategory.get("matcha") ?? [];
+  const MATCHA_SOURCE =
+    remoteItemsByCategory.get("matcha") ??
+    remoteItemsByCategory.get("matcha-ceremonial-grade") ??
+    [];
 
   const menuItemLookupByName = useMemo(() => {
     const lookup = new Map<string, MenuItemData>();
@@ -882,7 +964,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       if (!force && typeof document !== "undefined" && document.hidden) return;
       inFlight = true;
       try {
-        const catalog = await fetchMenuCatalog();
+        const catalog = await fetchMenuCatalog(menuBranchCode);
         if (!isMounted) return;
         setRemoteCatalog(catalog);
       } catch (error) {
@@ -941,7 +1023,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         void supabaseClient.removeChannel(channel);
       }
     };
-  }, []);
+  }, [menuBranchCode]);
 
   useEffect(() => {
     let isMounted = true;
@@ -952,7 +1034,10 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       if (!force && typeof document !== "undefined" && document.hidden) return;
       inFlight = true;
       try {
-        const access = await fetchTablePublicAccess(tableNumberNumeric);
+        const access = await fetchTablePublicAccess(
+          tableNumberNumeric,
+          menuBranchCode,
+        );
         if (!isMounted) return;
         setTableAccess(access);
       } catch (error) {
@@ -974,7 +1059,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
           serviceEndTime: "01:00",
           lastTakeawayTime: "00:30",
           timezone: "Asia/Karachi",
-          serviceHoursLabel: RESTAURANT.hours,
+          serviceHoursLabel: restaurantProfile.hours,
           lastTakeawayLabel: "12:30 AM",
         });
       } finally {
@@ -1021,14 +1106,14 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
         void supabaseClient.removeChannel(channel);
       }
     };
-  }, [tableNumberNumeric]);
+  }, [menuBranchCode, restaurantProfile.hours, tableNumberNumeric]);
 
   useEffect(() => {
     if (!tableAccess?.orderingEnabled) return;
-    void checkInTableFromQrApi(tableNumberNumeric).catch((error) => {
+    void checkInTableFromQrApi(tableNumberNumeric, menuBranchCode).catch((error) => {
       console.warn("Table check-in failed:", error);
     });
-  }, [tableAccess?.orderingEnabled, tableNumberNumeric]);
+  }, [menuBranchCode, tableAccess?.orderingEnabled, tableNumberNumeric]);
 
   const ensureOrderingEnabled = () => {
     if (tableAccess?.orderingEnabled) return true;
@@ -1100,7 +1185,8 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     try {
       await callWaiterApi({
         tableNumber: tableNumberNumeric,
-        tableLabel: `Table ${tableNumberNumeric}`,
+        tableLabel: tableAccess?.tableLabel || `Table ${tableNumberNumeric}`,
+        branchCode: menuBranchCode,
       });
       showCustomerWaiterBanner();
     } catch (error) {
@@ -1209,7 +1295,7 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
       localStorage.removeItem(storedOrderKey);
     }
     sessionStorage.removeItem("tempUserId");
-    window.location.href = "/menu";
+    window.location.href = `${menuBasePath}${tableQuery}`;
   };
 
   const validateCardholderName = (name: string) => {
@@ -1697,15 +1783,22 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     setScrollActiveTab(tab); // Sync the scroll active tab state
 
     // Scroll to the corresponding section
-    const refs = {
-      "Breakfast": breakfastRef,
-      "Salads": saladsRef,
-      "Sandwiches": sandwichesRef,
-      "Coffee": coffeeRef,
-      "Slow Bar": slowBarRef,
-      "Not Coffee": notCoffeeRef,
-      "Matcha": matchaRef,
-    };
+    const refs = isKaroMenuRoute
+      ? {
+          "Hot Coffee": breakfastRef,
+          "Iced Coffee": saladsRef,
+          "Signature Drinks": sandwichesRef,
+          "Matcha Ceremonial Grade": matchaRef,
+        }
+      : {
+          "Breakfast": breakfastRef,
+          "Salads": saladsRef,
+          "Sandwiches": sandwichesRef,
+          "Coffee": coffeeRef,
+          "Slow Bar": slowBarRef,
+          "Not Coffee": notCoffeeRef,
+          "Matcha": matchaRef,
+        };
 
     const targetRef = refs[tab as keyof typeof refs];
     if (targetRef?.current) {
@@ -1783,6 +1876,54 @@ const tableQuery = tableIdentifier ? `?table=${encodeURIComponent(tableIdentifie
     const basePrice = getBaseItemPrice(item, null);
     return basePrice > 0 ? `Rs.${basePrice.toLocaleString()}/-` : null;
   };
+
+  const renderStackedMenuSection = (
+    ref: React.RefObject<HTMLDivElement>,
+    title: string,
+    items: MenuItemData[],
+  ) => (
+    <div ref={ref} className="py-6">
+      <h2 className="mb-4 text-xl font-extrabold tracking-tight">{title}</h2>
+      <div className="space-y-2">
+        {items.map((item) => {
+          const priceLabel = getItemPriceLabel(item);
+          const unavailable = item.isAvailable === false;
+
+          return (
+            <button
+              key={item.name}
+              type="button"
+              onClick={() => openItemDetailFromData(item)}
+              disabled={unavailable}
+              className={`w-full text-left transition ${
+                unavailable ? "cursor-not-allowed opacity-60" : "hover:bg-gray-50"
+              }`}
+            >
+              <div className="flex w-full items-start justify-between gap-3 border-b border-gray-200 py-3">
+                <div className="flex-1">
+                  <div className="text-base font-semibold text-gray-900 heading-font">{item.name}</div>
+                  <div className="text-sm text-gray-600 subtext-font line-clamp-2">{item.description}</div>
+                  {unavailable ? (
+                    <div className="mt-1 inline-flex rounded-full bg-red-600 px-2 py-1 text-[10px] font-semibold text-white">
+                      Out of stock
+                    </div>
+                  ) : null}
+                  {priceLabel ? <div className="mt-1 text-sm font-bold text-gray-900">{priceLabel}</div> : null}
+                </div>
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                    unavailable ? "bg-gray-300 text-gray-500" : "bg-black text-white"
+                  }`}
+                >
+                  <Plus size={14} />
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 
   const getSuggestedItemByName = (itemName: string) => {
     const key = itemName.toLowerCase();
@@ -2128,15 +2269,22 @@ useEffect(() => {
     const observer = new IntersectionObserver(observerCallback, observerOptions);
 
     // Observe all sections
-    const sections = [
-      { id: "Breakfast", ref: breakfastRef },
-      { id: "Salads", ref: saladsRef },
-      { id: "Sandwiches", ref: sandwichesRef },
-      { id: "Coffee", ref: coffeeRef },
-      { id: "Slow Bar", ref: slowBarRef },
-      { id: "Not Coffee", ref: notCoffeeRef },
-      { id: "Matcha", ref: matchaRef },
-    ];
+    const sections = isKaroMenuRoute
+      ? [
+          { id: "Hot Coffee", ref: breakfastRef },
+          { id: "Iced Coffee", ref: saladsRef },
+          { id: "Signature Drinks", ref: sandwichesRef },
+          { id: "Matcha Ceremonial Grade", ref: matchaRef },
+        ]
+      : [
+          { id: "Breakfast", ref: breakfastRef },
+          { id: "Salads", ref: saladsRef },
+          { id: "Sandwiches", ref: sandwichesRef },
+          { id: "Coffee", ref: coffeeRef },
+          { id: "Slow Bar", ref: slowBarRef },
+          { id: "Not Coffee", ref: notCoffeeRef },
+          { id: "Matcha", ref: matchaRef },
+        ];
 
     sections.forEach(({ id, ref }) => {
       if (ref.current) {
@@ -2146,7 +2294,7 @@ useEffect(() => {
     });
 
     return () => observer.disconnect();
-  }, []);
+  }, [isKaroMenuRoute]);
 
   const openItemDetailFromCard = (cardEl: HTMLDivElement) => {
     const name = cardEl.querySelector('.item-title')?.textContent?.trim();
@@ -2427,7 +2575,7 @@ useEffect(() => {
       const response = await fetchCustomerOrderHistory({
         authUserId: normalizedAuthUserId || undefined,
         customerEmail: normalizedEmail || undefined,
-        branchCode: DEFAULT_BRANCH_CODE,
+        branchCode: menuBranchCode,
         limit: 1000,
       });
 
@@ -2501,7 +2649,8 @@ useEffect(() => {
       console.warn("Past orders sync failed:", error);
     } finally {
       setPastOrdersLoading(false);
-    }  };
+    }
+  };
 
   const loadLoyaltySummaryFromServer = async () => {
     const normalizedAuthUserId = accountAuthUserId.trim();
@@ -2518,7 +2667,7 @@ useEffect(() => {
     try {
       setLoyaltyLoading(true);
       const response = await fetchCustomerLoyaltySummary({
-        branchCode: DEFAULT_BRANCH_CODE,
+        branchCode: menuBranchCode,
       });
       setLoyaltySummary(response.summary);
     } catch (error) {
@@ -2535,17 +2684,17 @@ useEffect(() => {
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, [accountAuthUserId, accountEmail, isMenuAuthenticated]);
+  }, [accountAuthUserId, accountEmail, isMenuAuthenticated, menuBranchCode]);
 
-    useEffect(() => {
+  useEffect(() => {
     if (!showPastOrdersModal) return;
     void loadPastOrdersFromServer();
-  }, [showPastOrdersModal, accountAuthUserId, accountEmail, isMenuAuthenticated]);
+  }, [showPastOrdersModal, accountAuthUserId, accountEmail, isMenuAuthenticated, menuBranchCode]);
 
   useEffect(() => {
     if (!showLoyaltyCard) return;
     void loadLoyaltySummaryFromServer();
-  }, [showLoyaltyCard, accountAuthUserId, accountEmail, isMenuAuthenticated]);
+  }, [showLoyaltyCard, accountAuthUserId, accountEmail, isMenuAuthenticated, menuBranchCode]);
 
   useEffect(() => {
     if (!pendingCartOpenAfterProfile || !isMenuAuthenticated) {
@@ -2808,7 +2957,7 @@ useEffect(() => {
           new Date(order.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
       };
       const orderTableNumber = getTableNumberFromLabel(normalizedOrder.tableLabel);
-      if (orderTableNumber !== tableNumber) {
+      if (orderTableNumber !== tableNumberNumeric) {
         return;
       }
       setLastOrder(normalizedOrder);
@@ -2888,7 +3037,10 @@ useEffect(() => {
         return;
       }
       try {
-        const response = await fetchOrderStatus(orderNumber);
+        const response = await fetchOrderStatus(orderNumber, {
+          branchCode: menuBranchCode,
+          deviceFingerprint,
+        });
         const nextStatus = normalizeTrackedStatus(response.order.status);
         if (!cancelled) {
           updateOrderStatus(nextStatus, getOrderStatusMessage(nextStatus), orderNumber);
@@ -2909,7 +3061,7 @@ useEffect(() => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [lastOrder?.orderNumber, lastOrder?.status]);
+  }, [deviceFingerprint, lastOrder?.orderNumber, lastOrder?.status, menuBranchCode]);
 
   const getSuggestedItems = (currentName?: string) => {
     const currentKey = (currentName || "").toLowerCase().trim();
@@ -3747,7 +3899,7 @@ useEffect(() => {
                   This restaurant is not accepting orders right now. Please come back during operating hours.
                 </p>
                 <p className="mt-3 text-sm font-semibold text-black heading-font">
-                  Timings: {tableAccess?.serviceHoursLabel ?? RESTAURANT.hours}
+                  Timings: {tableAccess?.serviceHoursLabel ?? restaurantProfile.hours}
                 </p>
               </div>
             </motion.div>
@@ -3879,8 +4031,8 @@ useEffect(() => {
               </div>
 
               <div className="border-b border-gray-100 px-4 py-4">
-                <p className="text-sm font-semibold text-gray-900 heading-font">{RESTAURANT.name}</p>
-                <p className="mt-1 text-xs text-gray-500 subtext-font">{RESTAURANT.address}</p>
+                <p className="text-sm font-semibold text-gray-900 heading-font">{restaurantProfile.name}</p>
+                <p className="mt-1 text-xs text-gray-500 subtext-font">{restaurantProfile.address}</p>
               </div>
 
               <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -4494,11 +4646,11 @@ useEffect(() => {
       </div>
 
       {/* Menu Hero */}
-      <div className="relative">
-        <div className="h-[160px] w-full">
-          <img
-            src="/HeroImage.jpg"
-            alt="SIP hero"
+        <div className="relative">
+          <div className="h-[160px] w-full">
+            <img
+            src={heroImageSrc}
+            alt={isKaroMenuRoute ? "Karo hero" : "SIP hero"}
             className="h-full w-full object-cover object-bottom"
           />
           <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-black/10 to-transparent" />
@@ -4546,7 +4698,7 @@ useEffect(() => {
               >
                 <MenuIcon size={17} />
               </button>
-              <div className="text-lg font-semibold text-gray-900 heading-font">{RESTAURANT.name}</div>
+              <div className="text-lg font-semibold text-gray-900 heading-font">{restaurantProfile.name}</div>
             </div>
             <div className="flex items-center gap-2">
               {isMenuAuthenticated ? (
@@ -4732,30 +4884,30 @@ useEffect(() => {
           <div className="absolute -top-12 left-1/2 -translate-x-1/2">
             <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl bg-white shadow-xl border border-gray-100 flex items-center justify-center">
               <img
-                src="/logo.png"
-                alt="SIP logo"
+                src={isKaroMenuRoute ? "/Karo.jpg" : "/logo.png"}
+                alt={isKaroMenuRoute ? "Karo logo" : "SIP logo"}
                 className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl object-cover"
               />
-                  </div>
+            </div>
           </div>
-          <p className="text-xs uppercase tracking-[0.3em] text-gray-500 subtext-font">Table Tap</p>
-          <h1 className="mt-2 text-3xl font-semibold text-gray-900 heading-font">{RESTAURANT.name}</h1>
+          <p className="w-full text-left text-xs uppercase tracking-[0.3em] text-gray-500 subtext-font">Table Tap</p>
+          <h1 className="mt-2 w-full text-left text-3xl font-semibold text-gray-900 heading-font">{restaurantProfile.name}</h1>
           <div className="mt-3 flex flex-wrap items-center justify-center gap-3 text-sm text-gray-500 subtext-font">
             <div className="flex items-center gap-1">
               <Star size={16} className="text-yellow-500" />
               <span>
-                {RESTAURANT.rating} {"\u00B7"} {RESTAURANT.reviews.toLocaleString()}+ guests
+                {restaurantProfile.rating} {"\u00B7"} {restaurantProfile.reviews.toLocaleString()}+ guests
               </span>
             </div>
             <span className="text-gray-300">{"\u00B7"}</span>
             <div className="flex items-center gap-1">
               <MapPin size={16} className="text-gray-400" />
-              <span>{RESTAURANT.address}</span>
+              <span>{restaurantProfile.address}</span>
             </div>
             <span className="text-gray-300">{"\u00B7"}</span>
             <div className="flex items-center gap-1">
               <Clock size={16} className="text-gray-500" />
-              <span>House service: {tableAccess?.serviceHoursLabel ?? RESTAURANT.hours}</span>
+              <span>House service: {tableAccess?.serviceHoursLabel ?? restaurantProfile.hours}</span>
             </div>
             {isTakeawayMenu ? (
               <>
@@ -4777,7 +4929,7 @@ useEffect(() => {
               <div className="flex flex-col items-center justify-center py-4">
                 <div className="flex items-center gap-2">
                   <Clock size={16} className="text-gray-500" />
-                  <p className="text-base font-semibold text-gray-900 heading-font">{RESTAURANT.servingTime}</p>
+                  <p className="text-base font-semibold text-gray-900 heading-font">{restaurantProfile.servingTime}</p>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">Average service time</p>
               </div>
@@ -4827,11 +4979,17 @@ useEffect(() => {
             ))}
           </div>
         ) : null}
-        {/* Breakfast Section */}
+         {/* Breakfast / Hot Coffee Section */}
+          {BREAKFAST_SOURCE.length > 0 ? (
+          isKaroMenuRoute ? renderStackedMenuSection(
+            breakfastRef,
+            sectionTitleLabels.breakfast,
+            BREAKFAST_SOURCE,
+          ) : (
          <div ref={breakfastRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">BREAKFAST AT SIP.</h2>
-           <div className="flex space-x-4 overflow-x-auto">
-             {BREAKFAST_SOURCE.map((item) => (
+            <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels.breakfast}</h2>
+            <div className="flex space-x-4 overflow-x-auto">
+              {BREAKFAST_SOURCE.map((item) => (
                (() => {
                  const unavailable = item.isAvailable === false;
                  return (
@@ -4856,16 +5014,24 @@ useEffect(() => {
                   </div>
                </div>
                  );
-               })()
-             ))}
-           </div>
-         </div>
+                })()
+              ))}
+            </div>
+          </div>
+          )
+          ) : null}
 
-         {/* Salads Section */}
+          {/* Salads / Iced Coffee Section */}
+          {SALAD_SOURCE.length > 0 ? (
+          isKaroMenuRoute ? renderStackedMenuSection(
+            saladsRef,
+            sectionTitleLabels.salads,
+            SALAD_SOURCE,
+          ) : (
          <div ref={saladsRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">SALADS.</h2>
-           <div className="flex space-x-4 overflow-x-auto">
-             {SALAD_SOURCE.map((item) => (
+            <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels.salads}</h2>
+            <div className="flex space-x-4 overflow-x-auto">
+              {SALAD_SOURCE.map((item) => (
                (() => {
                  const unavailable = item.isAvailable === false;
                  return (
@@ -4890,16 +5056,24 @@ useEffect(() => {
                   </div>
                </div>
                  );
-               })()
-             ))}
-           </div>
-         </div>
+                })()
+              ))}
+            </div>
+          </div>
+          )
+          ) : null}
 
-         {/* Sandwiches Section */}
+          {/* Sandwiches / Signature Drinks Section */}
+          {SANDWICH_SOURCE.length > 0 ? (
+          isKaroMenuRoute ? renderStackedMenuSection(
+            sandwichesRef,
+            sectionTitleLabels.sandwiches,
+            SANDWICH_SOURCE,
+          ) : (
          <div ref={sandwichesRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">SANDWICHES.</h2>
-           <div className="flex space-x-4 overflow-x-auto">
-             {SANDWICH_SOURCE.map((item) => (
+            <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels.sandwiches}</h2>
+            <div className="flex space-x-4 overflow-x-auto">
+              {SANDWICH_SOURCE.map((item) => (
                (() => {
                  const unavailable = item.isAvailable === false;
                  return (
@@ -4924,14 +5098,17 @@ useEffect(() => {
                   </div>
                </div>
                  );
-               })()
-             ))}
-           </div>
-         </div>
+                })()
+              ))}
+            </div>
+          </div>
+          )
+          ) : null}
 
          {/* Coffee Section */}
+         {!isKaroMenuRoute && COFFEE_SOURCE.length > 0 ? (
          <div ref={coffeeRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">COFFEE.</h2>
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels.coffee}</h2>
            <div className="space-y-2">
              {COFFEE_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
@@ -4971,10 +5148,12 @@ useEffect(() => {
              })}
            </div>
          </div>
+         ) : null}
 
          {/* Slow Bar Section */}
+         {!isKaroMenuRoute && SLOW_BAR_SOURCE.length > 0 ? (
          <div ref={slowBarRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">SLOW BAR.</h2>
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels["slow-bar"]}</h2>
            <div className="space-y-2">
              {SLOW_BAR_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
@@ -5013,10 +5192,12 @@ useEffect(() => {
              })}
            </div>
          </div>
+         ) : null}
 
          {/* Not Coffee Section */}
+         {!isKaroMenuRoute && NOT_COFFEE_SOURCE.length > 0 ? (
          <div ref={notCoffeeRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">NOT COFFEE.</h2>
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels["not-coffee"]}</h2>
            <div className="space-y-2">
              {NOT_COFFEE_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
@@ -5055,10 +5236,12 @@ useEffect(() => {
              })}
            </div>
          </div>
+         ) : null}
 
          {/* Matcha Section */}
+         {MATCHA_SOURCE.length > 0 ? (
          <div ref={matchaRef} className="py-6">
-           <h2 className="text-xl font-extrabold tracking-tight mb-4">MATCHA.</h2>
+           <h2 className="text-xl font-extrabold tracking-tight mb-4">{sectionTitleLabels.matcha}</h2>
            <div className="space-y-2">
              {MATCHA_SOURCE.map((item) => {
                const priceLabel = getItemPriceLabel(item);
@@ -5097,6 +5280,7 @@ useEffect(() => {
              })}
            </div>
          </div>
+         ) : null}
       </div>
       {/* Item Detail Modal */}
       <AnimatePresence>
@@ -5345,13 +5529,13 @@ useEffect(() => {
               <button onClick={() => setShowCart(false)} className="p-2 rounded-full bg-gray-100">
                 <X size={20} />
               </button>
-              <div className="text-lg font-semibold heading-font">{RESTAURANT.name}</div>
+              <div className="text-lg font-semibold heading-font">{restaurantProfile.name}</div>
               <div className="w-10" />
                   </div>
 
             <div className="px-5 space-y-4 overflow-y-auto flex-1">
               <div>
-                <p className="text-2xl font-bold heading-font">{RESTAURANT.name}</p>
+                <p className="text-2xl font-bold heading-font">{restaurantProfile.name}</p>
                 <p className="text-lg text-gray-600 subtext-font">{isTakeawayMenu ? "Pick up from counter" : `Table ${tableNumber}`}</p>
               </div>
 
@@ -5631,18 +5815,13 @@ useEffect(() => {
 
               <div
                 className="mt-4 rounded-[28px] p-4"
-                style={{
-                  backgroundColor: "#95c6b5",
-                  backgroundImage: "linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 100%)",
-                  backgroundSize: "cover",
-                  backgroundPosition: "center",
-                }}
+                style={loyaltyCardStyle}
               >
                 <div className="flex items-center justify-between">
-                  <p className="text-[11px] uppercase tracking-[0.22em] text-white/85 subtext-font">
-                    Sip Loyalty Card
+                  <p className={loyaltyCardTitleClassName}>
+                    {restaurantProfile.name} Loyalty Card
                   </p>
-                  <p className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-semibold text-white heading-font">
+                  <p className={loyaltyCardCounterClassName}>
                     {loyaltyCycleStamps}/{loyaltyStampTarget}
                   </p>
                 </div>
@@ -5655,11 +5834,11 @@ useEffect(() => {
                         key={`loyalty-stamp-${index}`}
                         className="flex items-center justify-center"
                       >
-                        <div className="w-full max-w-16 aspect-square rounded-full bg-white/95 flex shrink-0 items-center justify-center overflow-hidden">
+                        <div className={loyaltyStampSlotClassName}>
                           {isFilled ? (
                             <img src={LOYALTY_CUP_STAMP_SRC} alt="Cup stamp" className="h-[120%] w-[120%] object-contain" />
                           ) : isFreeSlot ? (
-                            <span className="text-[10px] leading-[1.05] text-center text-[#b77d7d] font-semibold heading-font">
+                            <span className={loyaltyFreeTextClassName}>
                               free
                               <br />
                               coffee
@@ -5929,7 +6108,7 @@ useEffect(() => {
                   </button>
                   <div className="text-right">
                     <p className="text-xs uppercase tracking-widest text-white/70">{isTakeawayMenu ? "Takeaway" : `Table ${tableNumber}`}</p>
-                    <p className="text-lg font-semibold">SIP Checkout</p>
+                    <p className="text-lg font-semibold">{restaurantProfile.name} Checkout</p>
                   </div>
                 </div>
                 <div className="flex items-end justify-between">
@@ -6168,16 +6347,6 @@ useEffect(() => {
     </motion.div>
   );
 }
-
-
-
-
-
-
-
-
-
-
 
 
 

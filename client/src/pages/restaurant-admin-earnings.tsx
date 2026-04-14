@@ -13,6 +13,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAdminEarnings } from "@/lib/tabletap-supabase-api";
+import { useActiveBranchCode } from "@/lib/active-branch";
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
 type EarningsSnapshot = {
   summary: {
@@ -46,6 +50,7 @@ const statusBadgeClass = (value: "Current month" | "Ready to invoice") =>
     : "border-slate-200 bg-slate-50 text-slate-700";
 
 export default function RestaurantAdminEarnings() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE);
   const [snapshot, setSnapshot] = React.useState<EarningsSnapshot>({
     summary: {
       thisMonthSales: 0,
@@ -65,7 +70,7 @@ export default function RestaurantAdminEarnings() {
       if (typeof document !== "undefined" && document.hidden) return;
       inFlight = true;
       try {
-        const data = await fetchAdminEarnings();
+        const data = await fetchAdminEarnings(activeBranchCode);
         if (!cancelled) {
           setSnapshot({
             summary: data.summary,
@@ -96,7 +101,7 @@ export default function RestaurantAdminEarnings() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, []);
+  }, [activeBranchCode]);
 
   return (
     <SidebarProvider

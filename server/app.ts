@@ -4,6 +4,11 @@ import express, {
   type Request,
   type Response,
 } from "express";
+import {
+  createApiRateLimiter,
+  enforceApiContentType,
+  securityHeaders,
+} from "./security.js";
 
 export const log = (message: string, source = "express") => {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -58,8 +63,8 @@ const captureApiLogs = (req: Request, res: Response, next: NextFunction) => {
       logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
     }
 
-    if (logLine.length > 80) {
-      logLine = `${logLine.slice(0, 79)}...`;
+    if (logLine.length > 160) {
+      logLine = `${logLine.slice(0, 159)}...`;
     }
 
     log(logLine);
@@ -70,6 +75,12 @@ const captureApiLogs = (req: Request, res: Response, next: NextFunction) => {
 
 export const createApp = (): Express => {
   const app = express();
+
+  // OWASP-style defaults for proxy/IP awareness and server fingerprint hardening.
+  app.disable("x-powered-by");
+  app.set("trust proxy", true);
+
+  app.use(securityHeaders);
 
   app.use((req, res, next) => {
     const requestOrigin = String(req.headers.origin ?? "").trim();
@@ -109,7 +120,10 @@ export const createApp = (): Express => {
   });
 
   app.use(express.json({ limit: "1mb" }));
-  app.use(express.urlencoded({ extended: false }));
+  app.use(express.urlencoded({ extended: false, limit: "100kb" }));
+
+  app.use(enforceApiContentType);
+  app.use(createApiRateLimiter());
   app.use(captureApiLogs);
 
   return app;

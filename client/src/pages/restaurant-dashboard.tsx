@@ -7,6 +7,10 @@ import { SectionCards } from "@/components/section-cards";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { fetchOwnerTopItems } from "@/lib/tabletap-supabase-api";
+import { useActiveBranchCode } from "@/lib/active-branch";
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
 type RestaurantDashboardProps = {
   dashboardRole?: "owner" | "manager" | "admin";
@@ -15,14 +19,20 @@ type RestaurantDashboardProps = {
 export default function RestaurantDashboard({
   dashboardRole,
 }: RestaurantDashboardProps) {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE);
   const [rows, setRows] = React.useState<z.infer<typeof schema>[]>([]);
   const [topItemsLoading, setTopItemsLoading] = React.useState(true);
 
   React.useEffect(() => {
     let mounted = true;
-    fetchOwnerTopItems(undefined, 30)
+    setTopItemsLoading(true);
+    fetchOwnerTopItems(activeBranchCode, 30)
       .then((response) => {
-        if (!mounted || !response.rows.length) return;
+        if (!mounted) return;
+        if (!response.rows.length) {
+          setRows([]);
+          return;
+        }
         setRows(
           response.rows.map((row, index) => ({
             id: index + 1,
@@ -46,7 +56,7 @@ export default function RestaurantDashboard({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [activeBranchCode]);
 
   return (
     <SidebarProvider

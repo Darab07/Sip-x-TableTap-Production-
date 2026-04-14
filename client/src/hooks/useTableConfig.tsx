@@ -189,7 +189,7 @@ export const useTableConfig = (): TableConfigContextValue => {
 };
 
 export const getTableUrl = (table: TableConfig) =>
-  `/sip/menu?table=${encodeURIComponent(table.name)}`;
+  `/menu?table=${encodeURIComponent(table.name)}`;
 
 export const getCheckoutUrl = (
   table: TableConfig,

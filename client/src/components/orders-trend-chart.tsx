@@ -3,6 +3,7 @@ import { CartesianGrid, Line, LineChart, XAxis } from "recharts"
 
 import { useIsMobile } from "@/hooks/use-mobile"
 import { fetchOwnerOrdersTrend } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   ChartConfig,
@@ -22,7 +23,11 @@ const chartConfig = {
   },
 } satisfies ChartConfig
 
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
+
 export function OrdersTrendChart() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const isMobile = useIsMobile()
   const [mode, setMode] = React.useState<TrendMode>("day")
   const [isLoading, setIsLoading] = React.useState(true)
@@ -37,7 +42,7 @@ export function OrdersTrendChart() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerOrdersTrend(mode, undefined, 7)
+        const response = await fetchOwnerOrdersTrend(mode, activeBranchCode, 7)
         if (!cancelled) {
           setData(response.points)
         }
@@ -54,6 +59,7 @@ export function OrdersTrendChart() {
       }
     }
 
+    setIsLoading(true)
     void load()
     const timer = window.setInterval(() => {
       void load()
@@ -70,7 +76,7 @@ export function OrdersTrendChart() {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [mode])
+  }, [activeBranchCode, mode])
 
   return (
     <Card className="mx-4 lg:mx-6">

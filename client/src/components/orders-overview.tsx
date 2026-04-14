@@ -2,6 +2,7 @@ import * as React from "react"
 import { SearchIcon } from "lucide-react"
 
 import { fetchOwnerOrdersTable } from "@/lib/tabletap-supabase-api"
+import { useActiveBranchCode } from "@/lib/active-branch"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -34,6 +35,9 @@ type OrderRow = {
   dateTime: string
   completionPrepTime: string
 }
+
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad"
 
 const formatCurrency = (value: number) =>
   `Rs. ${value.toLocaleString("en-PK", { maximumFractionDigits: 0 })}`
@@ -73,6 +77,7 @@ const getStartOfWeek = (value: Date) => {
 }
 
 export function OrdersOverview() {
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
   const [search, setSearch] = React.useState("")
   const [statusFilter, setStatusFilter] = React.useState("all")
   const [dateRangeFilter, setDateRangeFilter] =
@@ -88,7 +93,7 @@ export function OrdersOverview() {
       if (typeof document !== "undefined" && document.hidden) return
       inFlight = true
       try {
-        const response = await fetchOwnerOrdersTable(undefined, 31)
+        const response = await fetchOwnerOrdersTable(activeBranchCode, 31)
         if (!cancelled) {
           setOrders(response.rows)
         }
@@ -104,6 +109,7 @@ export function OrdersOverview() {
       }
     }
 
+    setIsLoading(true)
     void load()
     const timer = window.setInterval(() => {
       void load()
@@ -120,7 +126,7 @@ export function OrdersOverview() {
       window.clearInterval(timer)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [])
+  }, [activeBranchCode])
 
   const filteredOrders = React.useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
