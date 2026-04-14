@@ -1,3 +1,8 @@
+import {
+  getApiDefaultBranchCode,
+  setApiDefaultBranchCode,
+} from "./tabletap-supabase-api"
+
 const RESTAURANT_AUTH_PERSIST_KEY = "restaurant_staff_session_persist_v3"
 const RESTAURANT_AUTH_SESSION_KEY = "restaurant_staff_session_session_v3"
 const RESTAURANT_AUTH_MODE_KEY = "restaurant_staff_session_mode_v3"
@@ -192,6 +197,36 @@ export const setRestaurantAuthenticated = (
   window.sessionStorage.setItem(RESTAURANT_AUTH_SESSION_KEY, payload)
   window.localStorage.removeItem(RESTAURANT_AUTH_PERSIST_KEY)
   window.localStorage.setItem(RESTAURANT_AUTH_MODE_KEY, "session")
+}
+
+export const syncRestaurantActiveBranch = (
+  session: Pick<RestaurantAuthenticatedSession, "outlets">,
+) => {
+  if (!hasWindow()) {
+    return
+  }
+
+  const allowedBranchCodes = Array.from(
+    new Set(
+      session.outlets
+        .map((entry) => String(entry.branchCode ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  )
+  if (!allowedBranchCodes.length) {
+    return
+  }
+
+  const currentBranchCode = String(getApiDefaultBranchCode() ?? "")
+    .trim()
+    .toLowerCase()
+
+  if (
+    allowedBranchCodes.length === 1 ||
+    !allowedBranchCodes.includes(currentBranchCode)
+  ) {
+    setApiDefaultBranchCode(allowedBranchCodes[0])
+  }
 }
 
 export const clearRestaurantAuthentication = () => {

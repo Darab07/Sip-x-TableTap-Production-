@@ -6,6 +6,7 @@ import {
   clearRestaurantAuthentication,
   getRestaurantAuthenticatedSession,
   setRestaurantAuthenticated,
+  syncRestaurantActiveBranch,
   type RestaurantAuthenticatedSession,
 } from "@/lib/restaurant-auth";
 import { supabaseBrowser } from "@/lib/supabase";
@@ -67,6 +68,7 @@ export default function Restaurant() {
         };
 
         setRestaurantAuthenticated(normalized, true);
+        syncRestaurantActiveBranch(normalized);
         if (!cancelled) {
           setLocation(getRoleRoute(normalized.highestRole));
         }
@@ -139,6 +141,7 @@ export default function Restaurant() {
               };
 
               setRestaurantAuthenticated(normalized, rememberMe);
+              syncRestaurantActiveBranch(normalized);
               setLocation(getRoleRoute(normalized.highestRole));
             } catch (sessionError) {
               await authClient.auth.signOut();

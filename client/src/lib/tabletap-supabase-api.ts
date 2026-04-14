@@ -560,14 +560,17 @@ export const fetchOrderStatus = async (
   orderNumber: string,
   options?: { branchCode?: string; deviceFingerprint?: string },
 ) => {
-  const params = new URLSearchParams({ ts: String(Date.now()) });
+  const params = new URLSearchParams();
   if (options?.branchCode) {
     params.set("branchCode", options.branchCode);
   }
   if (options?.deviceFingerprint) {
     params.set("deviceFingerprint", options.deviceFingerprint);
   }
-  const res = await apiFetch(`${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status?${params.toString()}`);
+  const query = params.toString();
+  const res = await apiFetch(
+    `${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status${query ? `?${query}` : ""}`,
+  );
   return readJson<{
     order: {
       id: string;

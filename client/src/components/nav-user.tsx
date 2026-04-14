@@ -10,6 +10,7 @@ import { useLocation } from "wouter"
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
 import { supabaseBrowser } from "@/lib/supabase"
 import { useActiveBranchCode } from "@/lib/active-branch"
+import { getOutletLogoForBranchCode } from "@/lib/outlet-branding"
 
 import {
   Avatar,
@@ -58,6 +59,11 @@ export function NavUser({
   const [location, setLocation] = useLocation()
   const [showRestaurantTimings, setShowRestaurantTimings] = React.useState(false)
   const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE)
+  const outletAvatar = getOutletLogoForBranchCode(activeBranchCode)
+  const avatarSrc =
+    dashboardRole === "owner" || dashboardRole === "manager"
+      ? outletAvatar
+      : user.avatar
 
   const canManageRestaurantTimings =
     dashboardRole === "owner" || dashboardRole === "manager"
@@ -73,10 +79,10 @@ export function NavUser({
                 className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
               >
                 <Avatar className="h-8 w-8 rounded-lg grayscale">
-                  <AvatarImage src={user.avatar} alt={user.name} />
+                  <AvatarImage src={avatarSrc} alt={user.name} />
                   <AvatarFallback className="overflow-hidden rounded-lg p-0">
                     <img
-                      src="/logo.png"
+                      src={outletAvatar}
                       alt="Table Tap logo"
                       className="h-full w-full object-cover"
                     />
@@ -102,10 +108,10 @@ export function NavUser({
               <DropdownMenuLabel className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                   <Avatar className="h-8 w-8 rounded-lg">
-                    <AvatarImage src={user.avatar} alt={user.name} />
+                    <AvatarImage src={avatarSrc} alt={user.name} />
                     <AvatarFallback className="overflow-hidden rounded-lg p-0">
                       <img
-                        src="/logo.png"
+                        src={outletAvatar}
                         alt="Table Tap logo"
                         className="h-full w-full object-cover"
                       />

@@ -19,6 +19,7 @@ import {
   type ManagerLiveOrder,
   updateManagerOrderStatus,
 } from "@/lib/tabletap-supabase-api";
+import { useActiveBranchCode } from "@/lib/active-branch";
 
 type OrderStatus = "new" | "accepted" | "preparing" | "ready";
 const CLEARED_READY_ORDERS_KEY = "tabletap_cleared_ready_live_orders";
@@ -77,10 +78,14 @@ type RestaurantManagerDashboardProps = {
   dashboardRole?: "owner" | "manager" | "admin";
 };
 
+const DEFAULT_BRANCH_CODE =
+  String(import.meta.env.VITE_DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
+
 export default function RestaurantManagerDashboard({
   dashboardRole = "manager",
 }: RestaurantManagerDashboardProps) {
   const [location] = useLocation();
+  const activeBranchCode = useActiveBranchCode(DEFAULT_BRANCH_CODE);
   const [orders, setOrders] = React.useState<LiveOrder[]>([]);
   const [isSyncingOrders, setIsSyncingOrders] = React.useState(false);
   const [isInitialLoading, setIsInitialLoading] = React.useState(true);
@@ -142,7 +147,7 @@ export default function RestaurantManagerDashboard({
   const syncOrders = React.useCallback(async () => {
     try {
       setIsSyncingOrders(true);
-      const response = await fetchManagerLiveOrders();
+      const response = await fetchManagerLiveOrders(activeBranchCode);
       if (Array.isArray(response.orders)) {
         setOrders(
           response.orders
@@ -162,7 +167,7 @@ export default function RestaurantManagerDashboard({
       setIsSyncingOrders(false);
       setIsInitialLoading(false);
     }
-  }, [clearedReadyOrderIds]);
+  }, [activeBranchCode, clearedReadyOrderIds]);
 
   const transitionOrderStatus = React.useCallback(
     async (
@@ -174,7 +179,7 @@ export default function RestaurantManagerDashboard({
       setUpdatingOrderId(order.id);
       updateOrder(order.id, { status: nextStatus });
       try {
-        await updateManagerOrderStatus(order.orderNumber, nextStatus);
+        await updateManagerOrderStatus(order.orderNumber, nextStatus, activeBranchCode);
         await syncOrders();
       } catch (error) {
         updateOrder(order.id, { status: previousStatus });
@@ -188,7 +193,7 @@ export default function RestaurantManagerDashboard({
         setUpdatingOrderId((current) => (current === order.id ? null : current));
       }
     },
-    [syncOrders]
+    [activeBranchCode, syncOrders]
   );
 
 

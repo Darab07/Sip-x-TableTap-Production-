@@ -34,6 +34,8 @@ interface StoredOrder {
   gstAmount: number;
   tableLabel: string;
   notes: string;
+  branchCode?: string;
+  restaurantSlug?: string;
   status: "placed" | "confirmed" | "preparing" | "ready" | "served";
   statusHistory: Array<{
     status: string;
@@ -45,8 +47,6 @@ interface StoredOrder {
 }
 
 const userId = getOrCreateUserID();
-const getStoredOrderKey = () => `lastOrder_${userId}`;
-
 type CardChoice = "debit" | "jazzcash" | "easypaisa" | null;
 
 export default function Checkout() {
@@ -114,6 +114,21 @@ export default function Checkout() {
     [subtotal, gstAmount],
   );
   const total = subtotal + tipAmount + gstAmount + serviceFee;
+  const getTrackerStorageScopes = (session: {
+    user?: { id?: string; email?: string };
+  } | null) => {
+    const scopes = new Set<string>();
+    const authUserId = String(session?.user?.id ?? "").trim();
+    const authEmail = String(session?.user?.email ?? "").trim().toLowerCase();
+    if (authUserId) {
+      scopes.add(`account_${authUserId}`);
+    }
+    if (authEmail) {
+      scopes.add(`account_${authEmail}`);
+    }
+    scopes.add(userId);
+    return Array.from(scopes);
+  };
   const paymentLabel =
     selectedCardChoice === null
       ? "Select payment method"
@@ -266,6 +281,8 @@ export default function Checkout() {
         gstAmount: placed.order.gstAmount,
         tableLabel: placed.order.tableLabel,
         notes: placed.order.notes,
+        branchCode: menuBranchCode || undefined,
+        restaurantSlug: menuRestaurantSlug || undefined,
         status: "placed",
         statusHistory: [
           {
@@ -293,28 +310,29 @@ export default function Checkout() {
       setIsPlacingOrder(false);
     }
 
-    localStorage.setItem(getStoredOrderKey(), JSON.stringify(orderData));
-    const trackedOrdersKey = `tracked_orders_${userId}`;
-    const existingTrackedOrders = (() => {
-      try {
-        const raw = localStorage.getItem(trackedOrdersKey);
-        if (!raw) return [] as StoredOrder[];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? (parsed as StoredOrder[]) : ([] as StoredOrder[]);
-      } catch {
-        return [] as StoredOrder[];
-      }
-    })();
     const normalizedOrderData: StoredOrder = {
       ...orderData,
       placedAt: orderData.placedAt || new Date().toISOString(),
     };
-    const nextTrackedOrders = [
-      normalizedOrderData,
-      ...existingTrackedOrders.filter((entry) => entry.orderNumber !== normalizedOrderData.orderNumber),
-    ].slice(0, 30);
-    localStorage.setItem(trackedOrdersKey, JSON.stringify(nextTrackedOrders));
-    localStorage.setItem(getStoredOrderKey(), JSON.stringify(normalizedOrderData));
+    for (const storageScope of getTrackerStorageScopes(session)) {
+      const trackedOrdersKey = `tracked_orders_${storageScope}`;
+      const existingTrackedOrders = (() => {
+        try {
+          const raw = localStorage.getItem(trackedOrdersKey);
+          if (!raw) return [] as StoredOrder[];
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? (parsed as StoredOrder[]) : ([] as StoredOrder[]);
+        } catch {
+          return [] as StoredOrder[];
+        }
+      })();
+      const nextTrackedOrders = [
+        normalizedOrderData,
+        ...existingTrackedOrders.filter((entry) => entry.orderNumber !== normalizedOrderData.orderNumber),
+      ].slice(0, 30);
+      localStorage.setItem(trackedOrdersKey, JSON.stringify(nextTrackedOrders));
+      localStorage.setItem(`lastOrder_${storageScope}`, JSON.stringify(normalizedOrderData));
+    }
 
     localStorage.removeItem(`cart_${userId}`);
     localStorage.removeItem(`selectedTip_${userId}`);

@@ -100,6 +100,8 @@ type StoredOrder = {
   gstAmount: number;
   tableLabel: string;
   notes: string;
+  branchCode?: string;
+  restaurantSlug?: string;
   status: 'placed' | 'confirmed' | 'preparing' | 'ready' | 'served';
   statusHistory: Array<{
     status: string;
@@ -498,6 +500,12 @@ export default function Menu() {
       }
       const normalizedOrder: StoredOrder = {
         ...parsed,
+        branchCode:
+          String((parsed as { branchCode?: unknown }).branchCode ?? "").trim().toLowerCase() ||
+          menuBranchCode,
+        restaurantSlug:
+          String((parsed as { restaurantSlug?: unknown }).restaurantSlug ?? "").trim().toLowerCase() ||
+          restaurantSlug,
         status: normalizedStatus,
         placedAt:
           parsed.placedAt ||
@@ -525,6 +533,12 @@ export default function Menu() {
       const normalized = parsed
         .map((entry) => ({
           ...(entry as StoredOrder),
+          branchCode:
+            String((entry as { branchCode?: unknown }).branchCode ?? "").trim().toLowerCase() ||
+            menuBranchCode,
+          restaurantSlug:
+            String((entry as { restaurantSlug?: unknown }).restaurantSlug ?? "").trim().toLowerCase() ||
+            restaurantSlug,
           status: normalizeTrackedStatus((entry as { status?: unknown }).status),
           placedAt:
             (entry as StoredOrder).placedAt ||
@@ -736,11 +750,15 @@ export default function Menu() {
           order.placedAt ||
           new Date(order.statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
       }))
+      .filter((order) => {
+        const orderBranchCode = String(order.branchCode ?? "").trim().toLowerCase();
+        return !orderBranchCode || orderBranchCode === menuBranchCode;
+      })
       .filter((order) => normalizeTrackedStatus(order.status) !== "served")
       .filter((order) => isOrderWithinTrackWindow(order))
       .filter((order) => getTableNumberFromLabel(order.tableLabel) === tableNumberNumeric)
       .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
-  }, [trackedOrders, tableNumberNumeric]);
+  }, [menuBranchCode, trackedOrders, tableNumberNumeric]);
 
   const currentTrackedOrder = trackableOrders[trackerPageIndex] ?? null;
   const hasTrackableOrders = trackableOrders.length > 0;
@@ -806,7 +824,7 @@ export default function Menu() {
     setShowOrderTracker(storedTrackedOrders.length > 0);
     setTrackedOrders(storedTrackedOrders);
     setTrackerPageIndex(0);
-  }, [tableNumberNumeric, trackerStorageScope]);
+  }, [menuBranchCode, restaurantSlug, tableNumberNumeric, trackerStorageScope]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !trackerStorageScope) return;
@@ -1257,6 +1275,7 @@ export default function Menu() {
       setShowOrderTracker(false);
     } else if (storedOrderKey) {
       localStorage.setItem(storedOrderKey, JSON.stringify(updatedOrder));
+      setShowOrderTracker(true);
     }
 
     if (isCompletedPastOrderStatus(updatedOrder.status)) {
@@ -2592,6 +2611,8 @@ useEffect(() => {
             gstAmount: Number(order.gstAmount ?? 0),
             tableLabel: order.tableLabel,
             notes: order.notes ?? "",
+            branchCode: menuBranchCode,
+            restaurantSlug,
             status: normalizedStatus,
             statusHistory: [
               {
@@ -2628,6 +2649,29 @@ useEffect(() => {
         .filter((order) => normalizeTrackedStatus(order.status) !== "served")
         .filter((order) => isOrderWithinTrackWindow(order));
 
+      const freshestActiveServerOrder = activeServerOrders[0] ?? null;
+
+      if (freshestActiveServerOrder) {
+        setLastOrder((current) => {
+          if (
+            current &&
+            current.orderNumber === freshestActiveServerOrder.orderNumber &&
+            normalizeTrackedStatus(current.status) ===
+              normalizeTrackedStatus(freshestActiveServerOrder.status)
+          ) {
+            return current;
+          }
+          return freshestActiveServerOrder;
+        });
+        const storedOrderKey = getStoredOrderKey();
+        if (storedOrderKey) {
+          localStorage.setItem(
+            storedOrderKey,
+            JSON.stringify(freshestActiveServerOrder),
+          );
+        }
+      }
+
       setTrackedOrders((current) => {
         const merged = [...activeServerOrders, ...current]
           .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
@@ -2645,6 +2689,10 @@ useEffect(() => {
           .filter((order) => isOrderWithinTrackWindow(order))
           .slice(0, 30);
       });
+      if (activeServerOrders.length > 0) {
+        setShowOrderTracker(true);
+        setTrackerPageIndex(0);
+      }
     } catch (error) {
       console.warn("Past orders sync failed:", error);
     } finally {
@@ -2684,7 +2732,7 @@ useEffect(() => {
     }, 1200);
 
     return () => window.clearTimeout(timer);
-  }, [accountAuthUserId, accountEmail, isMenuAuthenticated, menuBranchCode]);
+  }, [accountAuthUserId, accountEmail, isMenuAuthenticated, menuBranchCode, restaurantSlug]);
 
   useEffect(() => {
     if (!showPastOrdersModal) return;
@@ -2951,6 +2999,10 @@ useEffect(() => {
       const order = event.detail;
       const normalizedOrder: StoredOrder = {
         ...order,
+        branchCode:
+          String(order.branchCode ?? "").trim().toLowerCase() || menuBranchCode,
+        restaurantSlug:
+          String(order.restaurantSlug ?? "").trim().toLowerCase() || restaurantSlug,
         status: normalizeTrackedStatus(order.status),
         placedAt:
           order.placedAt ||
@@ -2989,7 +3041,7 @@ useEffect(() => {
 
     window.addEventListener('orderPlaced', handleOrderPlaced as EventListener);
     return () => window.removeEventListener('orderPlaced', handleOrderPlaced as EventListener);
-  }, []);
+  }, [menuBranchCode, restaurantSlug, tableNumberNumeric]);
 
   useEffect(() => {
     if (!lastOrder?.orderNumber || !supabaseBrowser) {
@@ -6347,12 +6399,6 @@ useEffect(() => {
     </motion.div>
   );
 }
-
-
-
-
-
-
 
 
 

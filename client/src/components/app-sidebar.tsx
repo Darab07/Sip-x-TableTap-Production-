@@ -18,6 +18,7 @@ import {
   getApiDefaultBranchCode,
   setApiDefaultBranchCode,
 } from "@/lib/tabletap-supabase-api"
+import { getOutletLogoForBranchCode } from "@/lib/outlet-branding"
 import { clearRestaurantAuthentication } from "@/lib/restaurant-auth"
 import { supabaseBrowser } from "@/lib/supabase"
 
@@ -249,11 +250,15 @@ export function AppSidebar({
         location.startsWith("/restaurant/manager/table-management"),
     },
   ]
+  const selectedOutletConfig =
+    outlets.find((outlet) => outlet.branchCode === selectedOutlet) ?? outlets[0]
   const user = {
     ...data.user,
     avatar:
       resolvedRole === "owner" || resolvedRole === "manager"
-        ? "/logo.png"
+        ? getOutletLogoForBranchCode(
+            selectedOutletConfig?.branchCode ?? selectedOutlet,
+          )
         : data.user.avatar,
     subtitle:
       resolvedRole === "manager"
@@ -262,8 +267,6 @@ export function AppSidebar({
           ? "Admin view"
           : "Owner view",
   }
-  const selectedOutletConfig =
-    outlets.find((outlet) => outlet.branchCode === selectedOutlet) ?? outlets[0]
   const sidebarCollapsibleMode = "offcanvas"
   return (
     <Sidebar
