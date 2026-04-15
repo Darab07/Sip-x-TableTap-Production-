@@ -288,30 +288,17 @@ export type CustomerOrderHistoryApiItem = {
 };
 
 export const fetchCustomerOrderHistory = async (input: {
-  authUserId?: string;
-  deviceFingerprint?: string;
-  customerEmail?: string;
   branchCode?: string;
   limit?: number;
-}) => {
+}, options?: { accessToken?: string }) => {
   const params = new URLSearchParams({
     branchCode: input.branchCode ?? DEFAULT_BRANCH_CODE,
     limit: String(input.limit ?? 200),
   });
 
-  if (input.authUserId) {
-    params.set("authUserId", input.authUserId.trim());
-  }
-
-  if (input.deviceFingerprint) {
-    params.set("deviceFingerprint", input.deviceFingerprint);
-  }
-
-  if (input.customerEmail) {
-    params.set("customerEmail", input.customerEmail.trim().toLowerCase());
-  }
-
-  const res = await apiFetch(`${API_BASE}/orders/history?${params.toString()}`);
+  const res = await apiFetch(`${API_BASE}/orders/history?${params.toString()}`, {
+    authToken: options?.accessToken,
+  });
   return readJson<{ orders: CustomerOrderHistoryApiItem[] }>(res);
 };
 export type CustomerLoyaltySummaryApi = {
@@ -325,12 +312,14 @@ export type CustomerLoyaltySummaryApi = {
 
 export const fetchCustomerLoyaltySummary = async (input?: {
   branchCode?: string;
-}) => {
+}, options?: { accessToken?: string }) => {
   const params = new URLSearchParams({
     branchCode: input?.branchCode ?? DEFAULT_BRANCH_CODE,
   });
 
-  const res = await apiFetch(`${API_BASE}/orders/loyalty-summary?${params.toString()}`);
+  const res = await apiFetch(`${API_BASE}/orders/loyalty-summary?${params.toString()}`, {
+    authToken: options?.accessToken,
+  });
   return readJson<{ summary: CustomerLoyaltySummaryApi }>(res);
 };
 
@@ -558,18 +547,18 @@ export const fetchOwnerOrdersTable = async (
 
 export const fetchOrderStatus = async (
   orderNumber: string,
-  options?: { branchCode?: string; deviceFingerprint?: string },
+  options?: { branchCode?: string; accessToken?: string },
 ) => {
   const params = new URLSearchParams();
   if (options?.branchCode) {
     params.set("branchCode", options.branchCode);
   }
-  if (options?.deviceFingerprint) {
-    params.set("deviceFingerprint", options.deviceFingerprint);
-  }
   const query = params.toString();
   const res = await apiFetch(
     `${API_BASE}/orders/${encodeURIComponent(orderNumber)}/status${query ? `?${query}` : ""}`,
+    {
+      authToken: options?.accessToken,
+    },
   );
   return readJson<{
     order: {

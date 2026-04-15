@@ -184,10 +184,7 @@ const placeOrderBodySchema = strictObject({
 
 const customerHistoryQuerySchema = strictObject({
   branchCode: branchCodeSchema.optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-  authUserId: z.string().trim().min(1).max(128).optional(),
-  deviceFingerprint: z.string().trim().min(8).max(256).optional(),
-  customerEmail: z.string().trim().toLowerCase().email().max(254).optional(),
+  limit: z.coerce.number().int().min(1).max(1000).optional(),
 });
 
 const loyaltySummaryQuerySchema = strictObject({
@@ -252,7 +249,6 @@ const orderStatusParamsSchema = strictObject({
 
 const orderStatusQuerySchema = strictObject({
   branchCode: branchCodeSchema.optional(),
-  deviceFingerprint: z.string().trim().min(8).max(256).optional(),
 });
 
 const adminQrCreateBodySchema = strictObject({
@@ -762,15 +758,13 @@ export const buildApiRouter = (): Router => {
         throw new HttpError(401, "You must be logged in to track this order");
       }
 
-      const { deviceFingerprint, branchCode } = req.query as z.infer<
+      const { branchCode } = req.query as z.infer<
         typeof orderStatusQuerySchema
       >;
 
       const order = await getOrderTrackerStatusForCustomer({
         orderNumber,
         customerAuthUserId: authenticatedUser.id,
-        customerEmail: authenticatedUser.email,
-        deviceFingerprint,
         branchCode,
       });
       res.json({ order });

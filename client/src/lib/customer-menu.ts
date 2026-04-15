@@ -30,7 +30,7 @@ const RESTAURANT_PROFILES: Record<string, MenuRestaurantProfile> = {
   sip: DEFAULT_RESTAURANT_PROFILE,
   karo: {
     slug: "karo",
-    name: "Karo Cafe",
+    name: "Káro Coffee Bar",
     address: "Roman Grove II, DHA 1",
     rating: 4.8,
     reviews: 100,

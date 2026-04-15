@@ -74,7 +74,7 @@ const PROMO_SLIDES = [
   {
     title: "Save TableTap to your Home Screen",
     description:
-      "Get order tracking notifications on your phone when your order is confirmed, being prepared, and served.",
+      "Get order tracking notifications on your phone when your order is confirmed, being prepared, and ready.",
     cta: "Add to Home Screen",
     image: "/Sip%20Homescreen.png",
   },
@@ -119,7 +119,7 @@ type StoredOrder = {
 };
 
 const isCompletedPastOrderStatus = (status: StoredOrder["status"]) =>
-  status === "ready" || status === "served";
+  status === "ready";
 
 const TRACKABLE_ORDER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -127,8 +127,15 @@ const normalizeTrackedStatus = (rawStatus: unknown): StoredOrder["status"] => {
   const normalized = String(rawStatus ?? "").trim().toLowerCase();
   if (normalized === "confirmed" || normalized === "accepted") return "confirmed";
   if (normalized === "preparing" || normalized === "in_progress") return "preparing";
-  if (normalized === "ready" || normalized === "ready_to_serve") return "ready";
-  if (normalized === "served" || normalized === "completed" || normalized === "done") return "served";
+  if (
+    normalized === "ready" ||
+    normalized === "ready_to_serve" ||
+    normalized === "served" ||
+    normalized === "completed" ||
+    normalized === "done"
+  ) {
+    return "ready";
+  }
   return "placed";
 };
 
@@ -490,7 +497,7 @@ export default function Menu() {
       const normalizedStatus = normalizeTrackedStatus(
         (parsed as { status?: unknown }).status,
       );
-      if (normalizedStatus === "served") {
+      if (isCompletedPastOrderStatus(normalizedStatus)) {
         localStorage.removeItem(`lastOrder_${storageScope}`);
         return null;
       }
@@ -544,7 +551,7 @@ export default function Menu() {
             (entry as StoredOrder).placedAt ||
             new Date((entry as StoredOrder).statusHistory?.[0]?.timestamp ?? Date.now()).toISOString(),
         }))
-        .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
+        .filter((entry) => !isCompletedPastOrderStatus(entry.status))
         .filter((entry) => isOrderWithinTrackWindow(entry));
 
       if (normalized.length === 0 && fallbackOrder) {
@@ -754,7 +761,7 @@ export default function Menu() {
         const orderBranchCode = String(order.branchCode ?? "").trim().toLowerCase();
         return !orderBranchCode || orderBranchCode === menuBranchCode;
       })
-      .filter((order) => normalizeTrackedStatus(order.status) !== "served")
+      .filter((order) => !isCompletedPastOrderStatus(order.status))
       .filter((order) => isOrderWithinTrackWindow(order))
       .filter((order) => getTableNumberFromLabel(order.tableLabel) === tableNumberNumeric)
       .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a));
@@ -1226,14 +1233,14 @@ export default function Menu() {
     const currentOrder = lastOrderRef.current;
     if (!currentOrder) return;
     if (targetOrderNumber && currentOrder.orderNumber !== targetOrderNumber) return;
-    if (normalizeTrackedStatus(currentOrder.status) === "served") return;
+    if (isCompletedPastOrderStatus(normalizeTrackedStatus(currentOrder.status))) return;
 
     const statusRank: Record<StoredOrder["status"], number> = {
       placed: 0,
       confirmed: 1,
       preparing: 2,
       ready: 3,
-      served: 4,
+      served: 3,
     };
 
     const normalizedNextStatus = normalizeTrackedStatus(newStatus);
@@ -1259,7 +1266,7 @@ export default function Menu() {
     setLastOrder(updatedOrder);
     setTrackedOrders((current) => {
       const withoutCurrent = current.filter((entry) => entry.orderNumber !== updatedOrder.orderNumber);
-      if (updatedOrder.status === "served" || !isOrderWithinTrackWindow(updatedOrder)) {
+      if (isCompletedPastOrderStatus(updatedOrder.status) || !isOrderWithinTrackWindow(updatedOrder)) {
         return withoutCurrent;
       }
       return [updatedOrder, ...withoutCurrent]
@@ -1268,7 +1275,7 @@ export default function Menu() {
     });
 
     const storedOrderKey = getStoredOrderKey();
-    if (updatedOrder.status === "served") {
+    if (isCompletedPastOrderStatus(updatedOrder.status)) {
       if (storedOrderKey) {
         localStorage.removeItem(storedOrderKey);
       }
@@ -1276,17 +1283,6 @@ export default function Menu() {
     } else if (storedOrderKey) {
       localStorage.setItem(storedOrderKey, JSON.stringify(updatedOrder));
       setShowOrderTracker(true);
-    }
-
-    if (isCompletedPastOrderStatus(updatedOrder.status)) {
-      setPastOrders((current) => {
-        const withoutCurrent = current.filter(
-          (entry) => entry.orderNumber !== updatedOrder.orderNumber,
-        );
-        return [updatedOrder, ...withoutCurrent].sort(
-          (a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a),
-        );
-      });
     }
 
     setNotification({
@@ -1301,7 +1297,7 @@ export default function Menu() {
     if (status === "confirmed") return "Your order has been confirmed!";
     if (status === "preparing") return "Your order is being prepared!";
     if (status === "ready") return "Your order is ready!";
-    if (status === "served") return "Your order has been served. Enjoy your meal!";
+    if (status === "served") return "Your order is ready!";
     return "Order placed successfully.";
   };
 
@@ -2579,23 +2575,32 @@ useEffect(() => {
   };
 
   const loadPastOrdersFromServer = async () => {
-    const normalizedAuthUserId = accountAuthUserId.trim();
-    const normalizedEmail = accountEmail.trim().toLowerCase();
-    const hasAccountIdentity =
-      isMenuAuthenticated &&
-      (Boolean(normalizedAuthUserId) || Boolean(normalizedEmail));
+    if (!supabaseBrowser) {
+      setPastOrders([]);
+      return;
+    }
 
-    if (!hasAccountIdentity) {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabaseBrowser.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    if (!session?.user?.id || !session.access_token) {
+      setPastOrders([]);
       return;
     }
 
     try {
       setPastOrdersLoading(true);
       const response = await fetchCustomerOrderHistory({
-        authUserId: normalizedAuthUserId || undefined,
-        customerEmail: normalizedEmail || undefined,
         branchCode: menuBranchCode,
         limit: 1000,
+      }, {
+        accessToken: session.access_token,
       });
 
       const mapped = response.orders
@@ -2646,7 +2651,6 @@ useEffect(() => {
 
       const activeServerOrders = deduped
         .filter((order) => !isCompletedPastOrderStatus(order.status))
-        .filter((order) => normalizeTrackedStatus(order.status) !== "served")
         .filter((order) => isOrderWithinTrackWindow(order));
 
       const freshestActiveServerOrder = activeServerOrders[0] ?? null;
@@ -2685,7 +2689,7 @@ useEffect(() => {
         }
 
         return unique
-          .filter((order) => normalizeTrackedStatus(order.status) !== "served")
+          .filter((order) => !isCompletedPastOrderStatus(order.status))
           .filter((order) => isOrderWithinTrackWindow(order))
           .slice(0, 30);
       });
@@ -2701,13 +2705,21 @@ useEffect(() => {
   };
 
   const loadLoyaltySummaryFromServer = async () => {
-    const normalizedAuthUserId = accountAuthUserId.trim();
-    const normalizedEmail = accountEmail.trim().toLowerCase();
-    const hasAccountIdentity =
-      isMenuAuthenticated &&
-      (Boolean(normalizedAuthUserId) || Boolean(normalizedEmail));
+    if (!supabaseBrowser) {
+      setLoyaltySummary(null);
+      return;
+    }
 
-    if (!hasAccountIdentity) {
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabaseBrowser.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    if (!session?.user?.id || !session.access_token) {
       setLoyaltySummary(null);
       return;
     }
@@ -2716,6 +2728,8 @@ useEffect(() => {
       setLoyaltyLoading(true);
       const response = await fetchCustomerLoyaltySummary({
         branchCode: menuBranchCode,
+      }, {
+        accessToken: session.access_token,
       });
       setLoyaltySummary(response.summary);
     } catch (error) {
@@ -3018,7 +3032,7 @@ useEffect(() => {
           (entry) => entry.orderNumber !== normalizedOrder.orderNumber,
         );
         return [normalizedOrder, ...withoutCurrent]
-          .filter((entry) => normalizeTrackedStatus(entry.status) !== "served")
+          .filter((entry) => !isCompletedPastOrderStatus(entry.status))
           .filter((entry) => isOrderWithinTrackWindow(entry))
           .sort((a, b) => getOrderPlacedAtMs(b) - getOrderPlacedAtMs(a))
           .slice(0, 30);
@@ -3077,10 +3091,15 @@ useEffect(() => {
   }, [lastOrder?.orderNumber]);
 
   useEffect(() => {
-    if (!lastOrder?.orderNumber || lastOrder.status === "served") {
+    if (
+      !supabaseBrowser ||
+      !lastOrder?.orderNumber ||
+      isCompletedPastOrderStatus(lastOrder.status)
+    ) {
       return;
     }
 
+    const supabaseClient = supabaseBrowser;
     let cancelled = false;
     const orderNumber = lastOrder.orderNumber;
 
@@ -3089,9 +3108,12 @@ useEffect(() => {
         return;
       }
       try {
+        const {
+          data: { session },
+        } = await supabaseClient.auth.getSession();
         const response = await fetchOrderStatus(orderNumber, {
           branchCode: menuBranchCode,
-          deviceFingerprint,
+          accessToken: session?.access_token,
         });
         const nextStatus = normalizeTrackedStatus(response.order.status);
         if (!cancelled) {
@@ -3113,7 +3135,7 @@ useEffect(() => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [deviceFingerprint, lastOrder?.orderNumber, lastOrder?.status, menuBranchCode]);
+  }, [lastOrder?.orderNumber, lastOrder?.status, menuBranchCode]);
 
   const getSuggestedItems = (currentName?: string) => {
     const currentKey = (currentName || "").toLowerCase().trim();
@@ -4814,8 +4836,7 @@ useEffect(() => {
                 };
                 const currentStep = statusStepMap[currentTrackedOrder.status];
                 const isTerminalStep =
-                  currentTrackedOrder.status === "ready" ||
-                  currentTrackedOrder.status === "served";
+                  isCompletedPastOrderStatus(currentTrackedOrder.status);
                 const isCompletedStep = step < currentStep;
                 const isCurrentAnimatedStep = !isTerminalStep && step === currentStep;
                 const isFilledStep = isCompletedStep || (isTerminalStep && step <= currentStep);
@@ -4853,7 +4874,7 @@ useEffect(() => {
                   {currentTrackedOrder.status === 'confirmed' && 'Order confirmed'}
                   {currentTrackedOrder.status === 'preparing' && 'Your order is being prepared'}
                   {currentTrackedOrder.status === 'ready' && 'Your order is ready'}
-                  {currentTrackedOrder.status === 'served' && 'Order served - Enjoy your meal!'}
+                  {currentTrackedOrder.status === 'served' && 'Your order is ready'}
                 </p>
                 <p className="mt-1 text-xs text-gray-500 subtext-font">
                   Order #{currentTrackedOrder.orderNumber} will be served to {currentTrackedOrder.tableLabel}.
@@ -5956,7 +5977,7 @@ useEffect(() => {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xl font-semibold text-gray-900 heading-font">Past order</p>
-                  <p className="mt-1 text-sm text-gray-500 subtext-font">Your completed orders for this device.</p>
+                  <p className="mt-1 text-sm text-gray-500 subtext-font">Your completed orders for this account.</p>
                 </div>
                 <button
                   type="button"
@@ -5992,7 +6013,7 @@ useEffect(() => {
                             Rs.{order.total.toLocaleString()}
                           </p>
                           <p className="mt-0.5 text-xs font-medium text-gray-500 subtext-font">
-                            {order.status === "ready" ? "Ready" : "Served"}
+                            Ready
                           </p>
                         </div>
                       </div>
@@ -6023,7 +6044,7 @@ useEffect(() => {
                 <div className="mt-5 rounded-2xl bg-gray-50 p-5 text-center">
                   <p className="text-sm font-semibold text-gray-900 heading-font">No past orders yet</p>
                   <p className="mt-1 text-sm text-gray-500 subtext-font">
-                    Your completed orders for this device will show up here.
+                    Your completed orders for this account will show up here.
                   </p>
                 </div>
               )}
@@ -6399,13 +6420,6 @@ useEffect(() => {
     </motion.div>
   );
 }
-
-
-
-
-
-
-
 
 
 

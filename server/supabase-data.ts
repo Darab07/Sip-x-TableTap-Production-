@@ -1040,10 +1040,12 @@ export const placeOrderInSupabase = async (
   const normalizedCustomerAuthUserId =
     String(input.customerAuthUserId ?? "").trim() || null;
   const hasAuthUserColumn = await hasOrdersCustomerAuthUserIdColumn();
+  if (!normalizedCustomerAuthUserId) {
+    throw new Error("customerAuthUserId is required");
+  }
   if (!tableAccess.orderingEnabled) {
     throw new Error(tableAccess.message);
   }
-  const deviceId = await ensureDevice(input.deviceFingerprint);
   if (input.deviceFingerprint) {
     try {
       await saveDeviceProfile(input.deviceFingerprint, {
@@ -1204,14 +1206,13 @@ export const placeOrderInSupabase = async (
       const placedAtMs = new Date(row.placed_at).getTime();
       if (!Number.isFinite(placedAtMs)) return false;
       if (nowMs - placedAtMs > ORDER_DEDUP_WINDOW_MS) return false;
-      if (hasAuthUserColumn && normalizedCustomerAuthUserId) {
-        if (
-          String(row.customer_auth_user_id ?? "").trim() !==
+      if (
+        !hasAuthUserColumn ||
+        String(row.customer_auth_user_id ?? "").trim() !==
           normalizedCustomerAuthUserId
-        ) {
-          return false;
-        }
-      } else if (deviceId && row.customer_device_id !== deviceId) return false;
+      ) {
+        return false;
+      }
 
       if (sanitizeMoney(Number(row.subtotal ?? 0)) !== subtotal) return false;
       if (sanitizeMoney(Number(row.tip_amount ?? 0)) !== tipAmount) return false;
@@ -1261,7 +1262,6 @@ export const placeOrderInSupabase = async (
       outlet_id: outlet.id,
       table_id: table.tableId,
       table_session_id: table.tableSessionId,
-      customer_device_id: deviceId,
       notes: input.notes || "",
       status: "placed",
       tip_amount: tipAmount,
@@ -1578,20 +1578,17 @@ export const getOrderTrackerStatus = async (orderNumber: string) => {
 export const getOrderTrackerStatusForCustomer = async (input: {
   orderNumber: string;
   customerAuthUserId: string;
-  customerEmail?: string;
-  deviceFingerprint?: string;
   branchCode?: string;
 }) => {
   const supabase = assertSupabaseAdmin();
   const normalizedLookup = input.orderNumber.trim();
   const normalizedAuthUserId = String(input.customerAuthUserId ?? "").trim();
-  const normalizedEmail = String(input.customerEmail ?? "").trim().toLowerCase();
 
   if (!normalizedLookup) {
     throw new Error("Order number is required");
   }
-  if (!normalizedAuthUserId && !normalizedEmail) {
-    throw new Error("customerAuthUserId or customerEmail is required");
+  if (!normalizedAuthUserId) {
+    throw new Error("customerAuthUserId is required");
   }
 
   const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
@@ -1650,98 +1647,7 @@ export const getOrderTrackerStatusForCustomer = async (input: {
       };
     }
   }
-
-  const deviceIds = new Set<string>();
-
-  if (normalizedEmail) {
-    const byEmail = await supabase
-      .from("customer_devices")
-      .select("id")
-      .eq("email", normalizedEmail);
-    if (byEmail.error) {
-      throw new Error(byEmail.error.message);
-    }
-    for (const row of byEmail.data ?? []) {
-      const id = String(row.id ?? "").trim();
-      if (id) {
-        deviceIds.add(id);
-      }
-    }
-  }
-
-  const normalizedFingerprint = String(input.deviceFingerprint ?? "").trim();
-  if (normalizedFingerprint) {
-    const byFingerprint = await supabase
-      .from("customer_devices")
-      .select("id")
-      .eq("device_fingerprint", normalizedFingerprint)
-      .maybeSingle<{ id: string }>();
-
-    if (byFingerprint.error) {
-      throw new Error(byFingerprint.error.message);
-    }
-    if (byFingerprint.data?.id) {
-      deviceIds.add(String(byFingerprint.data.id));
-    }
-  }
-
-  if (!deviceIds.size) {
-    throw new Error("Order not found");
-  }
-
-  const byOrderNumber = await supabase
-    .from("orders")
-    .select(selectCols)
-    .eq("outlet_id", outlet.id)
-    .eq("order_number", normalizedLookup)
-    .in("customer_device_id", Array.from(deviceIds))
-    .order("placed_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<{
-      id: string;
-      order_number: string;
-      status: string;
-      placed_at: string;
-    }>();
-
-  if (byOrderNumber.error) {
-    throw new Error(byOrderNumber.error.message);
-  }
-
-  let data = byOrderNumber.data;
-
-  if (!data && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalizedLookup)) {
-    const byId = await supabase
-      .from("orders")
-      .select(selectCols)
-      .eq("outlet_id", outlet.id)
-      .eq("id", normalizedLookup)
-      .in("customer_device_id", Array.from(deviceIds))
-      .order("placed_at", { ascending: false })
-      .limit(1)
-      .maybeSingle<{
-        id: string;
-        order_number: string;
-        status: string;
-        placed_at: string;
-      }>();
-
-    if (byId.error) {
-      throw new Error(byId.error.message);
-    }
-
-    data = byId.data;
-  }
-
-  if (!data) {
-    throw new Error("Order not found");
-  }
-
-  return {
-    id: data.id,
-    orderNumber: data.order_number,
-    status: toCustomerTrackerStatus(data.status),
-  };
+  throw new Error("Order not found");
 };
 export type CustomerOrderHistoryItem = {
   orderNumber: string;
@@ -1919,6 +1825,56 @@ const getCustomerOrderHistoryByAuthUserId = async (input: {
   return mapHistoryRowsToCustomerOrders((data ?? []) as unknown as HistoryOrderRow[]);
 };
 
+const backfillCustomerOrderHistoryAuthLinks = async (input: {
+  customerAuthUserId: string;
+  customerEmail?: string;
+}) => {
+  const normalizedAuthUserId = String(input.customerAuthUserId ?? "").trim();
+  const normalizedEmail = String(input.customerEmail ?? "").trim().toLowerCase();
+  if (!normalizedAuthUserId || !normalizedEmail) {
+    return 0;
+  }
+
+  if (!(await hasOrdersCustomerAuthUserIdColumn())) {
+    return 0;
+  }
+
+  const supabase = assertSupabaseAdmin();
+  const { data: customerDevices, error: customerDevicesError } = await supabase
+    .from("customer_devices")
+    .select("id")
+    .eq("email", normalizedEmail);
+
+  if (customerDevicesError) {
+    throw new Error(customerDevicesError.message);
+  }
+
+  const deviceIds = Array.from(
+    new Set(
+      (customerDevices ?? [])
+        .map((row) => String(row.id ?? "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (!deviceIds.length) {
+    return 0;
+  }
+
+  const updateResult = await supabase
+    .from("orders")
+    .update({ customer_auth_user_id: normalizedAuthUserId })
+    .is("customer_auth_user_id", null)
+    .in("customer_device_id", deviceIds)
+    .select("id");
+
+  if (updateResult.error) {
+    throw new Error(updateResult.error.message);
+  }
+
+  return Array.isArray(updateResult.data) ? updateResult.data.length : 0;
+};
+
 export const getCustomerOrderHistoryForAccount = async (input: {
   customerAuthUserId: string;
   customerEmail?: string;
@@ -1930,6 +1886,11 @@ export const getCustomerOrderHistoryForAccount = async (input: {
     throw new Error("customerAuthUserId is required");
   }
 
+  await backfillCustomerOrderHistoryAuthLinks({
+    customerAuthUserId: normalizedAuthUserId,
+    customerEmail: input.customerEmail,
+  });
+
   const outlet = await getOutletByBranchCode(input.branchCode || DEFAULT_BRANCH);
   const safeLimit = Math.min(Math.max(Math.round(Number(input.limit ?? 200)), 1), 1000);
 
@@ -1938,27 +1899,7 @@ export const getCustomerOrderHistoryForAccount = async (input: {
     customerAuthUserId: normalizedAuthUserId,
     limit: safeLimit,
   });
-
-  const byEmail = input.customerEmail
-    ? await getCustomerOrderHistoryByCustomerEmail({
-        customerEmail: input.customerEmail,
-        branchCode: input.branchCode,
-        limit: safeLimit,
-      })
-    : [];
-
-  const merged = [...byAuthId, ...byEmail].sort(
-    (a, b) => new Date(b.placedAt).getTime() - new Date(a.placedAt).getTime(),
-  );
-
-  const seen = new Set<string>();
-  return merged
-    .filter((order) => {
-      if (seen.has(order.orderNumber)) return false;
-      seen.add(order.orderNumber);
-      return true;
-    })
-    .slice(0, safeLimit);
+  return byAuthId.slice(0, safeLimit);
 };
 
 
@@ -2638,6 +2579,17 @@ const toTitleCaseBranch = (value: string) =>
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join(", ");
 
+const getDisplayRestaurantName = (
+  branchCode: string,
+  fallbackName: string,
+) => {
+  const normalizedBranchCode = String(branchCode ?? "").trim().toLowerCase();
+  if (normalizedBranchCode.startsWith("karo")) {
+    return "Káro Coffee Bar";
+  }
+  return fallbackName;
+};
+
 type OutletOptionRow = {
   id: string | null;
   branch_code: string | null;
@@ -2654,7 +2606,10 @@ const toOutletOption = (row: OutletOptionRow): OutletOption => {
     id: String(row.id),
     branchCode,
     branchLabel: toTitleCaseBranch(branchCode),
-    restaurantName: String(restaurantRelation?.name ?? "Sip"),
+    restaurantName: getDisplayRestaurantName(
+      branchCode,
+      String(restaurantRelation?.name ?? "Sip"),
+    ),
   };
 };
 
@@ -2832,7 +2787,10 @@ export const getAdminEarnings = async (
     const branchCode = String(typedRow.branch_code ?? DEFAULT_BRANCH);
     outletLookup.set(outletId, {
       restaurantId,
-      restaurantName: String(restaurantRelation?.name ?? "Sip"),
+      restaurantName: getDisplayRestaurantName(
+        branchCode,
+        String(restaurantRelation?.name ?? "Sip"),
+      ),
       branchCode,
       branchLabel: toTitleCaseBranch(branchCode),
     });

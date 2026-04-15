@@ -15,6 +15,14 @@ const roleRank: RoleRank = {
 const STAFF_CACHE_TTL_MS = 15_000;
 const DEFAULT_BRANCH_CODE = String(process.env.DEFAULT_BRANCH_CODE ?? "").trim() || "f7-islamabad";
 
+const getDisplayOutletName = (branchCode: string, fallbackName: string) => {
+  const normalizedBranchCode = String(branchCode ?? "").trim().toLowerCase();
+  if (normalizedBranchCode.startsWith("karo")) {
+    return "Káro Coffee Bar";
+  }
+  return fallbackName;
+};
+
 type AuthenticatedUser = {
   id: string;
   email: string;
@@ -173,7 +181,10 @@ const resolveStaffContext = async (req: Request): Promise<StaffAccessContext> =>
 
     const outletId = String(rawRow.outlet_id ?? "").trim();
     const branchCode = String(outletRelation?.branch_code ?? "").trim();
-    const outletName = String(outletRelation?.name ?? "").trim() || branchCode;
+    const outletName = getDisplayOutletName(
+      branchCode,
+      String(outletRelation?.name ?? "").trim() || branchCode,
+    );
     if (!outletId || !branchCode) {
       continue;
     }
